@@ -1,0 +1,10 @@
+[build]
+  publish = "."
+  functions = "server/netlify/functions"
+
+# Единый endpoint для фронтенда: leadEndpoint: '/api/lead'
+[[redirects]]
+  from = "/api/lead"
+  to = "/.netlify/functions/lead"
+  status = 200
+  force = true
