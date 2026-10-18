@@ -13,6 +13,8 @@ window.MEDELA_CONFIG = {
     address: 'г. Ташкент, ул. Гагарина, 40/39',
     hours: 'Пн–Сб 8:00–18:00',
     telegramUrl: 'https://t.me/Medela_uz',
+    // Бот для записи — на него ведёт страница /zapis (имя без @)
+    telegramBot: 'medelazapisbot',
     instagramUrl: 'https://www.instagram.com/medela.clinic'
   },
 

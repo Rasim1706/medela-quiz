@@ -193,6 +193,17 @@ python3 -m http.server 8080
 
 Без `lang` пользователь сначала видит экран выбора языка. Meta добавляет `fbclid` автоматически, он уходит в заявку.
 
+## Страница записи через Telegram-бота (`/zapis`)
+
+Отдельная посадочная страница `zapis/` для рекламы, которая ведёт сразу в бота **@medelazapisbot**. После деплоя открывается по адресу `https://<ваш-домен>/zapis`.
+
+- Бот задаётся в `config.js` → `clinic.telegramBot`, пиксель и GTM берутся из того же `config.js`.
+- Тексты на русском и узбекском — в начале `zapis/zapis.js` (объект `TEXTS`). Язык: `?lang=ru` / `?lang=uz`, иначе — последний выбранный или язык браузера.
+- Кнопка ведёт на `https://t.me/medelazapisbot?start=<язык>-<utm_source>-<utm_content>`, например `ru-instagram-c2_last_checkup_ru_4x5`. Бот получает этот параметр в команде `/start` и может записать, из какой рекламы пришёл человек.
+- События: нажатие на кнопку бота → Meta Pixel **`Lead`** и `zapis_bot_click` в dataLayer; нажатие на телефон → `Contact` и `zapis_phone_click`. Перед переходом в Telegram страница ждёт 0,3 секунды, чтобы пиксель успел отправить событие.
+
+Ссылка для рекламы: `https://<ваш-домен>/zapis?lang=ru&utm_source=instagram&utm_content=c1_quiz_ru_4x5`
+
 ## Аналитика (dataLayer и GTM)
 
 Все события отправляются в `window.dataLayer`. Имён и телефонов там **нет**.
