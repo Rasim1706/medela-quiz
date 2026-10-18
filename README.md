@@ -29,6 +29,7 @@ medela-quiz/
 Нужен любой статический сервер (просто открыть `index.html` двойным кликом тоже можно, но `?lang=` и история браузера надёжнее работают через сервер):
 
 ```bash
+git clone https://github.com/Rasim1706/medela-quiz.git
 cd medela-quiz
 python3 -m http.server 8080
 # или: npx serve .
@@ -165,19 +166,19 @@ python3 -m http.server 8080
 
 ## Деплой
 
-Квиз — статический сайт: папку `medela-quiz` можно разместить на любом хостинге (nginx, S3, GitHub Pages, поддомен `quiz.medela.uz`). Функция отправки заявок работает на Vercel и Netlify.
+Квиз — статический сайт: содержимое репозитория можно разместить на любом хостинге (nginx, S3, GitHub Pages, поддомен `quiz.medela.uz`). Функция отправки заявок работает на Vercel и Netlify.
 
 ### Vercel
 
 1. Импортируйте репозиторий в Vercel.
-2. **Root Directory** → `medela-quiz`, Framework Preset → **Other**, Build Command — пусто.
+2. **Root Directory** — оставьте корень репозитория, Framework Preset → **Other**, Build Command — пусто.
 3. Добавьте переменные окружения `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
 4. Deploy. Функция будет доступна по адресу `/api/lead` (файл `api/lead.js`).
 
 ### Netlify
 
 1. Импортируйте репозиторий в Netlify.
-2. **Base directory** → `medela-quiz`. Остальное берётся из `netlify.toml` (публикуется папка целиком, функции — из `server/netlify/functions`, адрес `/api/lead` перенаправляется на функцию).
+2. **Base directory** — оставьте пустым. Остальное берётся из `netlify.toml` (публикуется папка целиком, функции — из `server/netlify/functions`, адрес `/api/lead` перенаправляется на функцию).
 3. Добавьте переменные окружения `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
 4. Deploy.
 
