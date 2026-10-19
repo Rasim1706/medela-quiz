@@ -1,66 +1,67 @@
 /**
- * MEDELA — учёт лидов в Google Таблице.
+ * MEDELA — учёт лидов в Google Таблице + Telegram-бот для пересылки заявок.
  *
  * Что делает:
- *  • setup()  — создаёт листы «Лиды», «Сводка», «Справочники» с колонками, выпадающими списками,
- *               цветами статусов и формулами сводки. Запустить один раз.
- *  • doPost() — приёмник заявок (веб-приложение). Боты отправляют сюда заявку:
- *               либо JSON с полями, либо просто текст сообщения из Telegram-группы ({"text": "..."}).
- *               Текст разбирается автоматически (форматы «Квиз Check-up» и «MedelaStaffBot»).
+ *  • setup()          — создаёт листы «Лиды», «Итоги», «Списки»: колонки, выпадающие списки,
+ *                       цвета статусов (Квал / Не квал / Недозвон) и формулы итогов. Запустить один раз.
+ *  • Telegram-бот     — администратор пересылает боту заявки из группы (можно сразу пачкой),
+ *                       скрипт раз в минуту забирает их (pollTelegram), разбирает и добавляет строки.
+ *                       Сервер не нужен.
+ *  • doPost()         — тот же приёмник принимает заявки и напрямую от ботов/сайта:
+ *                       JSON с полями или {"text": "текст сообщения"}.
  *
  * Установка — в leads-sheet/README.md.
  */
 
 var SHEET_LEADS = 'Лиды';
-var SHEET_SUMMARY = 'Сводка';
-var SHEET_LISTS = 'Справочники';
+var SHEET_SUMMARY = 'Итоги';
+var SHEET_LISTS = 'Списки';
 
 // Порядок колонок листа «Лиды». Меняя порядок, запустите setup() заново на пустой таблице.
 var COLUMNS = [
-  { key: 'n', title: '№', width: 50 },
-  { key: 'date', title: 'Дата и время', width: 140 },
-  { key: 'channel', title: 'Канал', width: 140 },
-  { key: 'platform', title: 'Площадка', width: 110 },
-  { key: 'campaign', title: 'Кампания / объявление', width: 190 },
+  { key: 'n', title: '№', width: 45 },
+  { key: 'date', title: 'Дата и время', width: 130 },
   { key: 'name', title: 'Имя', width: 170 },
-  { key: 'phone', title: 'Телефон', width: 135 },
-  { key: 'service', title: 'Услуга / направление', width: 190 },
+  { key: 'phone', title: 'Телефон', width: 130 },
+  { key: 'channel', title: 'Канал', width: 125 },
+  { key: 'platform', title: 'Площадка', width: 100 },
+  { key: 'service', title: 'Услуга', width: 180 },
+  { key: 'status', title: 'Статус', width: 100 },
+  { key: 'reason', title: 'Причина «не квал»', width: 170 },
+  { key: 'comment', title: 'Комментарий', width: 220 },
+  { key: 'manager', title: 'Ответственный', width: 130 },
+  { key: 'repeat', title: 'Повтор', width: 70 },
   { key: 'doctor', title: 'Врач', width: 150 },
-  { key: 'lang', title: 'Язык', width: 60 },
+  { key: 'lang', title: 'Язык', width: 55 },
   { key: 'city', title: 'Город', width: 100 },
   { key: 'callTime', title: 'Когда удобно', width: 150 },
-  { key: 'status', title: 'Статус', width: 130 },
-  { key: 'visitDate', title: 'Дата визита', width: 105 },
-  { key: 'amount', title: 'Сумма, сум', width: 110 },
-  { key: 'manager', title: 'Ответственный', width: 120 },
-  { key: 'comment', title: 'Комментарий', width: 220 },
-  { key: 'repeat', title: 'Повтор', width: 75 },
+  { key: 'campaign', title: 'Кампания / объявление', width: 190 },
   { key: 'details', title: 'Детали заявки', width: 260 },
   { key: 'tag', title: 'Метка / UTM', width: 220 },
-  { key: 'telegramId', title: 'Telegram ID', width: 110 },
-  { key: 'externalId', title: 'ID в системе', width: 100 }
+  { key: 'telegramId', title: 'Telegram ID', width: 105 },
+  { key: 'externalId', title: 'ID в системе', width: 90 }
 ];
 
 var CHANNELS = ['Квиз Check-up', 'Telegram-бот', 'Сайт /zapis', 'Звонок', 'Instagram Direct', 'Telegram (личка)', 'Пришёл сам', 'Другое'];
 var PLATFORMS = ['Instagram', 'Facebook', 'Meta', 'Telegram', 'Google', 'Органика', 'Не определено'];
-var STATUSES = ['Новый', 'Не дозвонились', 'В работе', 'Записан', 'Пришёл', 'Отказ', 'Спам / дубль'];
-var STATUS_COLORS = {
-  'Новый': '#E3F2FD', 'Не дозвонились': '#FFF4E5', 'В работе': '#FFF9C4', 'Записан': '#E8F5E9',
-  'Пришёл': '#C8E6C9', 'Отказ': '#F5F5F5', 'Спам / дубль': '#ECEFF1'
-};
+var STATUSES = ['Квал', 'Не квал', 'Недозвон'];
+var STATUS_COLORS = { 'Квал': '#C8E6C9', 'Не квал': '#F8D7DA', 'Недозвон': '#FFE8B3' };
+var REASONS = ['Дорого', 'Нет нужной услуги', 'Другой город', 'Только узнать цену', 'Записался в другом месте', 'Ошибся номером', 'Спам', 'Другое'];
 var REPEAT_DAYS = 30;
 
 /* =========================== Меню =========================== */
 
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('MEDELA')
-    .addItem('Настроить таблицу', 'setup')
-    .addItem('Показать ссылку для ботов', 'showWebhookInfo')
+    .addItem('1. Настроить таблицу', 'setup')
+    .addItem('2. Подключить Telegram-бота', 'connectTelegramBot')
+    .addSeparator()
+    .addItem('Ссылка для приёма заявок от ботов/сайта', 'showWebhookInfo')
     .addItem('Добавить тестовые заявки', 'addTestLeads')
     .addToUi();
 }
 
-/* =========================== Настройка =========================== */
+/* =========================== Настройка таблицы =========================== */
 
 function setup() {
   var ss = SpreadsheetApp.getActive();
@@ -68,181 +69,197 @@ function setup() {
   ss.setSpreadsheetTimeZone('Asia/Tashkent');
 
   var lists = getOrCreate_(ss, SHEET_LISTS);
+  var managers = lists.getRange('E2:E30').getValues().filter(function (r) { return r[0]; });
   lists.clear();
   writeList_(lists, 1, 'Каналы', CHANNELS);
   writeList_(lists, 2, 'Площадки', PLATFORMS);
   writeList_(lists, 3, 'Статусы', STATUSES);
-  lists.getRange(1, 4).setValue('Ответственные').setFontWeight('bold');
-  if (!lists.getRange(2, 4).getValue()) lists.getRange(2, 4, 2, 1).setValues([['Администратор 1'], ['Администратор 2']]);
-  lists.setColumnWidths(1, 4, 170);
+  writeList_(lists, 4, 'Причины «не квал»', REASONS);
+  writeList_(lists, 5, 'Ответственные', managers.length ? managers.map(function (r) { return r[0]; }) : ['Администратор 1', 'Администратор 2']);
+  lists.setColumnWidths(1, 5, 180);
+  lists.getRange('G1').setValue('Списки можно дополнять — новые значения появятся в выпадающих меню.').setFontStyle('italic');
 
   var sh = getOrCreate_(ss, SHEET_LEADS);
   var header = COLUMNS.map(function (c) { return c.title; });
   sh.getRange(1, 1, 1, header.length).setValues([header])
     .setFontWeight('bold').setBackground('#0F4650').setFontColor('#FFFFFF')
     .setVerticalAlignment('middle').setWrap(true);
-  sh.setRowHeight(1, 40);
+  sh.setRowHeight(1, 36);
   sh.setFrozenRows(1);
-  sh.setFrozenColumns(2);
+  sh.setFrozenColumns(3);
   COLUMNS.forEach(function (c, i) { sh.setColumnWidth(i + 1, c.width); });
 
   var rows = sh.getMaxRows() - 1;
   col_(sh, 'date').offset(1, 0, rows).setNumberFormat('dd.mm.yyyy hh:mm');
-  col_(sh, 'visitDate').offset(1, 0, rows).setNumberFormat('dd.mm.yyyy');
-  col_(sh, 'amount').offset(1, 0, rows).setNumberFormat('#,##0');
   col_(sh, 'phone').offset(1, 0, rows).setNumberFormat('@');
+  col_(sh, 'status').offset(1, 0, rows).setHorizontalAlignment('center');
 
-  validation_(sh, 'channel', lists.getRange('A2:A50'));
-  validation_(sh, 'platform', lists.getRange('B2:B50'));
-  validation_(sh, 'status', lists.getRange('C2:C50'));
-  validation_(sh, 'manager', lists.getRange('D2:D50'), true);
+  validation_(sh, 'channel', lists.getRange('A2:A30'));
+  validation_(sh, 'platform', lists.getRange('B2:B30'));
+  validation_(sh, 'status', lists.getRange('C2:C30'));
+  validation_(sh, 'reason', lists.getRange('D2:D30'), true);
+  validation_(sh, 'manager', lists.getRange('E2:E30'), true);
 
-  // Цвет строки по статусу
   var statusLetter = letter_(colIndex_('status'));
-  var lastLetter = letter_(COLUMNS.length);
-  var range = sh.getRange('A2:' + lastLetter);
-  var rules = Object.keys(STATUS_COLORS).map(function (s) {
+  var range = sh.getRange('A2:' + letter_(COLUMNS.length));
+  sh.setConditionalFormatRules(Object.keys(STATUS_COLORS).map(function (s) {
     return SpreadsheetApp.newConditionalFormatRule()
       .whenFormulaSatisfied('=$' + statusLetter + '2="' + s + '"')
       .setBackground(STATUS_COLORS[s]).setRanges([range]).build();
-  });
-  sh.setConditionalFormatRules(rules);
+  }));
   if (!sh.getFilter()) sh.getRange(1, 1, sh.getMaxRows(), COLUMNS.length).createFilter();
 
   buildSummary_(ss);
+  var def = ss.getSheetByName('Лист1') || ss.getSheetByName('Sheet1');
+  if (def && def.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(def);
   ss.setActiveSheet(sh);
-  SpreadsheetApp.getActive().toast('Таблица готова. Дальше: Развернуть → Новое развёртывание → Веб-приложение.', 'MEDELA', 8);
+  ss.toast('Таблица готова. Следующий шаг — меню MEDELA → «2. Подключить Telegram-бота».', 'MEDELA', 8);
 }
 
 function buildSummary_(ss) {
   var s = getOrCreate_(ss, SHEET_SUMMARY);
   s.clear();
-  // Формулы в setFormula всегда пишутся с запятыми (английский синтаксис), Таблица сама покажет их по-русски
+  // В setFormula формулы пишутся с запятыми (английский синтаксис) — Таблица сама покажет их по-русски
   var L = "'" + SHEET_LEADS + "'!";
   var c = function (key) { var l = letter_(colIndex_(key)); return L + '$' + l + '$2:$' + l; };
-  var D = c('date'), P = c('platform'), CH = c('channel'), ST = c('status'), AM = c('amount'), RP = c('repeat');
+  var D = c('date'), N = c('name'), P = c('platform'), CH = c('channel'), ST = c('status'), RS = c('reason'), RP = c('repeat');
   var period = D + ',">="&$B$2,' + D + ',"<"&$D$2+1';
-  var cnt = function (cond) { return 'COUNTIFS(' + cond + ',' + period + ')'; };
+  var cnt = function (cond) { return 'COUNTIFS(' + period + (cond ? ',' + cond : '') + ')'; };
 
-  s.getRange('A1').setValue('Сводка по лидам MEDELA').setFontSize(16).setFontWeight('bold');
+  s.getRange('A1').setValue('Итоги по лидам MEDELA').setFontSize(16).setFontWeight('bold');
   s.getRange('A2').setValue('Период с');
   s.getRange('C2').setValue('по');
   s.getRange('B2').setFormula('=EOMONTH(TODAY(),-1)+1');
   s.getRange('D2').setFormula('=TODAY()');
   s.getRange('B2:D2').setNumberFormat('dd.mm.yyyy');
-  s.getRange('B2').setBackground('#FFF9C4').setNote('Дату можно поменять вручную');
-  s.getRange('D2').setBackground('#FFF9C4').setNote('Дату можно поменять вручную');
+  ['B2', 'D2'].forEach(function (a) { s.getRange(a).setBackground('#FFF2CC').setFontWeight('bold').setNote('Дату можно поменять вручную'); });
 
-  // По площадкам
-  var head = ['Площадка', 'Лиды', 'Без повторов', 'Записан', 'Пришёл', 'Конверсия в визит', 'Выручка, сум', 'Расход на рекламу, сум', 'Цена лида', 'Цена визита'];
-  s.getRange(4, 1, 1, head.length).setValues([head]);
-  PLATFORMS.forEach(function (p, i) {
-    var r = 5 + i, k = P + ',$A' + r;
-    s.getRange(r, 1).setValue(p);
-    s.getRange(r, 2).setFormula('=' + cnt(k));
-    s.getRange(r, 3).setFormula('=' + cnt(k + ',' + RP + ',"<>Повтор"'));
-    s.getRange(r, 4).setFormula('=' + cnt(k + ',' + ST + ',"Записан"') + '+E' + r);
-    s.getRange(r, 5).setFormula('=' + cnt(k + ',' + ST + ',"Пришёл"'));
-    s.getRange(r, 6).setFormula('=IFERROR(E' + r + '/C' + r + ',0)');
-    s.getRange(r, 7).setFormula('=SUMIFS(' + AM + ',' + k + ',' + period + ')');
-    s.getRange(r, 8).setBackground('#FFF9C4');
-    s.getRange(r, 9).setFormula('=IF(H' + r + '="","",IFERROR(H' + r + '/C' + r + ',""))');
-    s.getRange(r, 10).setFormula('=IF(H' + r + '="","",IFERROR(H' + r + '/E' + r + ',""))');
-  });
-  var tr = 5 + PLATFORMS.length;
-  s.getRange(tr, 1).setValue('Итого');
-  ['B', 'C', 'D', 'E', 'G', 'H'].forEach(function (col) {
-    s.getRange(col + tr).setFormula('=SUM(' + col + '5:' + col + (tr - 1) + ')');
-  });
-  s.getRange('F' + tr).setFormula('=IFERROR(E' + tr + '/C' + tr + ',0)');
-  s.getRange('I' + tr).setFormula('=IF(H' + tr + '=0,"",IFERROR(H' + tr + '/C' + tr + ',""))');
-  s.getRange('J' + tr).setFormula('=IF(H' + tr + '=0,"",IFERROR(H' + tr + '/E' + tr + ',""))');
-  styleTable_(s, 4, tr, head.length);
-  s.getRange(tr, 1, 1, head.length).setFontWeight('bold');
-  s.getRange(5, 6, tr - 4, 1).setNumberFormat('0%');
-  s.getRange(5, 7, tr - 4, 4).setNumberFormat('#,##0');
+  // Блок «по площадкам» и «по каналам» — одинаковые колонки
+  var head = ['', 'Лиды', 'Без повторов', 'Квал', 'Не квал', 'Недозвон', 'Не обработано', '% квал'];
+  var block = function (row, title, field, items, withSpend) {
+    s.getRange(row - 1, 1).setValue(title).setFontWeight('bold').setFontSize(12);
+    var h = head.slice(); h[0] = title.replace('По ', '').replace(/^./, function (x) { return x.toUpperCase(); });
+    if (withSpend) h = h.concat(['Расход на рекламу, сум', 'Цена лида', 'Цена квал-лида']);
+    s.getRange(row, 1, 1, h.length).setValues([h]);
+    items.forEach(function (it, i) {
+      var r = row + 1 + i, k = field + ',$A' + r;
+      s.getRange(r, 1).setValue(it);
+      s.getRange(r, 2).setFormula('=' + cnt(k + ',' + N + ',"<>"'));
+      s.getRange(r, 3).setFormula('=' + cnt(k + ',' + N + ',"<>",' + RP + ',"<>Повтор"'));
+      s.getRange(r, 4).setFormula('=' + cnt(k + ',' + ST + ',"Квал"'));
+      s.getRange(r, 5).setFormula('=' + cnt(k + ',' + ST + ',"Не квал"'));
+      s.getRange(r, 6).setFormula('=' + cnt(k + ',' + ST + ',"Недозвон"'));
+      s.getRange(r, 7).setFormula('=B' + r + '-D' + r + '-E' + r + '-F' + r);
+      s.getRange(r, 8).setFormula('=IFERROR(D' + r + '/B' + r + ',0)');
+      if (withSpend) {
+        s.getRange(r, 9).setBackground('#FFF2CC');
+        s.getRange(r, 10).setFormula('=IF(I' + r + '="","",IFERROR(I' + r + '/B' + r + ',""))');
+        s.getRange(r, 11).setFormula('=IF(I' + r + '="","",IFERROR(I' + r + '/D' + r + ',""))');
+      }
+    });
+    var t = row + 1 + items.length;
+    s.getRange(t, 1).setValue('Итого');
+    ['B', 'C', 'D', 'E', 'F', 'G'].concat(withSpend ? ['I'] : []).forEach(function (col) {
+      s.getRange(col + t).setFormula('=SUM(' + col + (row + 1) + ':' + col + (t - 1) + ')');
+    });
+    s.getRange('H' + t).setFormula('=IFERROR(D' + t + '/B' + t + ',0)');
+    if (withSpend) {
+      s.getRange('J' + t).setFormula('=IF(I' + t + '=0,"",IFERROR(I' + t + '/B' + t + ',""))');
+      s.getRange('K' + t).setFormula('=IF(I' + t + '=0,"",IFERROR(I' + t + '/D' + t + ',""))');
+      s.getRange(row + 1, 9, items.length + 1, 3).setNumberFormat('#,##0');
+    }
+    s.getRange(row + 1, 8, items.length + 1, 1).setNumberFormat('0%');
+    styleTable_(s, row, t, h.length);
+    s.getRange(t, 1, 1, h.length).setFontWeight('bold');
+    return t;
+  };
 
-  // По каналам
-  var r0 = tr + 3;
-  s.getRange(r0 - 1, 1).setValue('По каналам').setFontWeight('bold');
-  s.getRange(r0, 1, 1, 5).setValues([['Канал', 'Лиды', 'Записан', 'Пришёл', 'Конверсия в визит']]);
-  CHANNELS.forEach(function (ch, i) {
-    var r = r0 + 1 + i, k = CH + ',$A' + r;
-    s.getRange(r, 1).setValue(ch);
-    s.getRange(r, 2).setFormula('=' + cnt(k));
-    s.getRange(r, 3).setFormula('=' + cnt(k + ',' + ST + ',"Записан"') + '+D' + r);
-    s.getRange(r, 4).setFormula('=' + cnt(k + ',' + ST + ',"Пришёл"'));
-    s.getRange(r, 5).setFormula('=IFERROR(D' + r + '/B' + r + ',0)');
-  });
-  var rEnd = r0 + CHANNELS.length;
-  styleTable_(s, r0, rEnd, 5);
-  s.getRange(r0 + 1, 5, CHANNELS.length, 1).setNumberFormat('0%');
+  var end1 = block(5, 'По площадкам', P, PLATFORMS, true);
+  var end2 = block(end1 + 4, 'По каналам', CH, CHANNELS, false);
 
-  // По статусам
-  var q0 = rEnd + 3;
-  s.getRange(q0 - 1, 1).setValue('По статусам').setFontWeight('bold');
-  s.getRange(q0, 1, 1, 2).setValues([['Статус', 'Лиды']]);
-  STATUSES.forEach(function (st, i) {
+  // Причины «не квал»
+  var q0 = end2 + 4;
+  s.getRange(q0 - 1, 1).setValue('Причины «не квал»').setFontWeight('bold').setFontSize(12);
+  s.getRange(q0, 1, 1, 2).setValues([['Причина', 'Лиды']]);
+  REASONS.forEach(function (rs, i) {
     var r = q0 + 1 + i;
-    s.getRange(r, 1).setValue(st).setBackground(STATUS_COLORS[st]);
-    s.getRange(r, 2).setFormula('=' + cnt(ST + ',$A' + r));
+    s.getRange(r, 1).setValue(rs);
+    s.getRange(r, 2).setFormula('=' + cnt(ST + ',"Не квал",' + RS + ',$A' + r));
   });
-  styleTable_(s, q0, q0 + STATUSES.length, 2);
+  styleTable_(s, q0, q0 + REASONS.length, 2);
 
-  // По дням (последние 14 дней), колонки M–O
-  var d0 = 4, dc = 13;
-  s.getRange(d0 - 1, dc).setValue('Последние 14 дней').setFontWeight('bold');
-  s.getRange(d0, dc, 1, 3).setValues([['День', 'Лиды', 'Пришёл']]);
+  // По дням — последние 14 дней (колонки M–O)
+  var d0 = 5, dc = 13;
+  s.getRange(d0 - 1, dc).setValue('Последние 14 дней').setFontWeight('bold').setFontSize(12);
+  s.getRange(d0, dc, 1, 3).setValues([['День', 'Лиды', 'Квал']]);
   for (var i = 0; i < 14; i++) {
     var r = d0 + 1 + i, day = D + ',">="&M' + r + ',' + D + ',"<"&M' + r + '+1';
     s.getRange(r, dc).setFormula('=TODAY()-' + i);
-    s.getRange(r, dc + 1).setFormula('=COUNTIFS(' + day + ')');
-    s.getRange(r, dc + 2).setFormula('=COUNTIFS(' + day + ',' + ST + ',"Пришёл")');
+    s.getRange(r, dc + 1).setFormula('=COUNTIFS(' + day + ',' + N + ',"<>")');
+    s.getRange(r, dc + 2).setFormula('=COUNTIFS(' + day + ',' + ST + ',"Квал")');
   }
   s.getRange(d0 + 1, dc, 14, 1).setNumberFormat('dd.mm ddd');
   styleTable_(s, d0, d0 + 14, 3, dc);
 
   s.setColumnWidth(1, 170);
-  s.setColumnWidths(2, 9, 110);
-  s.setColumnWidths(11, 2, 30);
-  s.setColumnWidth(13, 110);
+  s.setColumnWidths(2, 10, 105);
+  s.setColumnWidth(12, 24);
+  s.setColumnWidth(13, 105);
   s.setFrozenRows(2);
 }
 
 /* =========================== Приём заявок =========================== */
 
 function doPost(e) {
-  var lock = LockService.getScriptLock();
+  var body = {};
+  try { body = JSON.parse(e.postData.contents); } catch (err) { body = { text: e.postData ? e.postData.contents : '' }; }
+  var key = PropertiesService.getScriptProperties().getProperty('KEY');
+  if (key && (!e.parameter || e.parameter.key !== key)) return json_({ ok: false, error: 'bad_key' });
+
   try {
-    var key = PropertiesService.getScriptProperties().getProperty('KEY');
-    if (key && (!e.parameter || e.parameter.key !== key)) return json_({ ok: false, error: 'bad_key' });
-
-    var body = {};
-    try { body = JSON.parse(e.postData.contents); } catch (err) { body = { text: e.postData ? e.postData.contents : '' }; }
+    if (body.update_id !== undefined) return json_({ ok: true }); // бот работает через pollTelegram()
     var lead = body.text && !body.phone ? parseText(body.text) : normalizeFields(body);
-    if (!lead.phone && !lead.name) return json_({ ok: false, error: 'empty_lead' });
-
-    lock.waitLock(20000);
-    var row = appendLead_(lead);
-    return json_({ ok: true, row: row });
+    var res = addLead_(lead, body.text || JSON.stringify(body));
+    return json_(res);
   } catch (err) {
     console.error(err);
     return json_({ ok: false, error: String(err) });
-  } finally {
-    try { lock.releaseLock(); } catch (e2) { /* ничего */ }
   }
 }
 
 function doGet() {
-  return json_({ ok: true, service: 'MEDELA leads', hint: 'POST JSON or {"text": "..."}' });
+  return json_({ ok: true, service: 'MEDELA leads' });
 }
 
-function appendLead_(lead) {
-  var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_LEADS);
+/**
+ * Добавляет заявку, если её ещё нет. Возвращает {ok, row, duplicate, error}.
+ * Дубли: тот же текст за 6 часов (повторная пересылка, повтор от Telegram) или тот же «ID в системе».
+ */
+function addLead_(lead, rawText) {
+  if (!lead.phone && !lead.name) return { ok: false, error: 'empty_lead' };
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(20000);
+  try {
+    var cache = CacheService.getScriptCache();
+    var hash = rawText ? digest_(rawText) : '';
+    if (hash && cache.get('lead_' + hash)) return { ok: true, duplicate: true };
+    var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_LEADS);
+    if (lead.externalId && findRow_(sh, 'externalId', lead.externalId)) {
+      if (hash) cache.put('lead_' + hash, '1', 21600);
+      return { ok: true, duplicate: true };
+    }
+    var row = appendLead_(sh, lead);
+    if (hash) cache.put('lead_' + hash, String(row), 21600);
+    return { ok: true, row: row };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function appendLead_(sh, lead) {
   var last = sh.getLastRow();
-  lead.n = last; // номер = номер строки - 1
+  lead.n = last; // № = номер строки − 1
   lead.date = lead.date || new Date();
-  lead.status = lead.status || 'Новый';
   lead.repeat = isRepeat_(sh, lead.phone) ? 'Повтор' : '';
   var values = COLUMNS.map(function (c) { return lead[c.key] === undefined ? '' : lead[c.key]; });
   sh.getRange(last + 1, 1, 1, values.length).setValues([values]);
@@ -256,9 +273,140 @@ function isRepeat_(sh, phone) {
   var dates = col_(sh, 'date').offset(1, 0, n).getValues();
   var since = Date.now() - REPEAT_DAYS * 24 * 3600 * 1000;
   for (var i = 0; i < n; i++) {
-    if (String(phones[i][0]) === phone && dates[i][0] instanceof Date && dates[i][0].getTime() >= since) return true;
+    var d = dates[i][0];
+    if (String(phones[i][0]) === phone && d instanceof Date && d.getTime() >= since) return true;
   }
   return false;
+}
+
+function findRow_(sh, key, value) {
+  if (sh.getLastRow() < 2) return 0;
+  var vals = col_(sh, key).offset(1, 0, sh.getLastRow() - 1).getValues();
+  for (var i = 0; i < vals.length; i++) if (String(vals[i][0]) === String(value)) return i + 2;
+  return 0;
+}
+
+/* =========================== Telegram-бот =========================== */
+
+function connectTelegramBot() {
+  var ui = SpreadsheetApp.getUi();
+  var res = ui.prompt('Подключение Telegram-бота', 'Вставьте токен бота от @BotFather (вида 123456:ABC...):', ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+  var token = res.getResponseText().trim();
+  var me = JSON.parse(UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/getMe', { muteHttpExceptions: true }).getContentText() || '{}');
+  if (!me.ok) { ui.alert('Токен не подошёл: ' + (me.description || 'проверьте, что скопировали его целиком')); return; }
+
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('BOT_TOKEN', token);
+  props.deleteProperty('TG_OFFSET');
+  // Бот забирает сообщения сам (getUpdates) — webhook не нужен
+  UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/deleteWebhook', { muteHttpExceptions: true });
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'pollTelegram') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('pollTelegram').timeBased().everyMinutes(1).create();
+
+  ui.alert('Бот @' + me.result.username + ' подключён.\n\nОткройте его в Telegram и нажмите «Старт» — первый, кто это сделает, станет администратором. ' +
+    'Потом пересылайте ему заявки из группы: они появятся в таблице в течение минуты.');
+}
+
+// Запускается раз в минуту по триггеру: забирает новые сообщения бота и обрабатывает их
+function pollTelegram() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) return;
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var token = props.getProperty('BOT_TOKEN');
+    if (!token) return;
+    var offset = Number(props.getProperty('TG_OFFSET') || 0);
+    var r = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/getUpdates?timeout=0&limit=100&allowed_updates=%5B%22message%22%5D' +
+      (offset ? '&offset=' + offset : ''), { muteHttpExceptions: true });
+    var data = JSON.parse(r.getContentText() || '{}');
+    if (!data.ok) { console.error('getUpdates: ' + r.getContentText()); return; }
+    data.result.forEach(function (u) {
+      props.setProperty('TG_OFFSET', String(u.update_id + 1)); // сначала сдвигаем, чтобы не обработать дважды
+      try { handleTelegramUpdate_(u); } catch (err) { console.error(err); }
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function handleTelegramUpdate_(update) {
+  var msg = update.message;
+  if (!msg || !msg.chat || msg.chat.type !== 'private') return;
+  var userId = String(msg.from && msg.from.id);
+  var text = msg.text || msg.caption || '';
+
+  var props = PropertiesService.getScriptProperties();
+  var allowed = (props.getProperty('ALLOWED_IDS') || '').split(',').filter(String);
+  if (!allowed.length) { // первый пользователь становится администратором
+    allowed = [userId];
+    props.setProperty('ALLOWED_IDS', userId);
+    tgSend_(msg.chat.id, '👋 Вы — администратор этого бота.\n\nПересылайте сюда заявки из группы (можно выделить несколько и переслать сразу) — я добавлю их в таблицу.\n\nЧтобы дать доступ коллеге: /add ID (ID он увидит, написав боту).');
+    if (/^\/start/.test(text)) return;
+  }
+  if (allowed.indexOf(userId) === -1) {
+    tgSend_(msg.chat.id, '⛔ Нет доступа. Ваш ID: ' + userId + '\nПопросите администратора отправить боту: /add ' + userId);
+    return;
+  }
+
+  if (/^\/start|^\/help/.test(text)) {
+    tgSend_(msg.chat.id, 'Пересылайте сюда заявки из группы — я добавлю их в таблицу «Лиды».\n\n/add ID — дать доступ коллеге\n/stats — лиды за сегодня');
+    return;
+  }
+  var add = /^\/add\s+(\d+)/.exec(text);
+  if (add) {
+    if (allowed.indexOf(add[1]) === -1) allowed.push(add[1]);
+    props.setProperty('ALLOWED_IDS', allowed.join(','));
+    tgSend_(msg.chat.id, '✅ Доступ выдан: ' + add[1]);
+    return;
+  }
+  if (/^\/stats/.test(text)) {
+    tgSend_(msg.chat.id, statsToday_());
+    return;
+  }
+
+  var lead = parseText(text);
+  if (!lead.phone) {
+    tgSend_(msg.chat.id, '🤔 Не нашёл в сообщении телефон. Перешлите заявку целиком.', msg.message_id);
+    return;
+  }
+  // Дата заявки = время исходного сообщения в группе
+  var origin = msg.forward_origin && msg.forward_origin.date ? msg.forward_origin.date : (msg.forward_date || msg.date);
+  lead.date = new Date(origin * 1000);
+  var res = addLead_(lead, text);
+  var who = (lead.name || lead.phone) + (lead.channel ? ' · ' + lead.channel : '');
+  if (res.duplicate) tgSend_(msg.chat.id, '⚠️ Уже в таблице: ' + who, msg.message_id);
+  else if (res.ok) tgSend_(msg.chat.id, '✅ Добавлено (строка ' + res.row + '): ' + who, msg.message_id);
+  else tgSend_(msg.chat.id, '❌ Не получилось добавить: ' + res.error, msg.message_id);
+}
+
+function statsToday_() {
+  var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_LEADS);
+  if (sh.getLastRow() < 2) return 'Сегодня лидов пока нет.';
+  var n = sh.getLastRow() - 1;
+  var dates = col_(sh, 'date').offset(1, 0, n).getValues();
+  var st = col_(sh, 'status').offset(1, 0, n).getValues();
+  var today = Utilities.formatDate(new Date(), 'Asia/Tashkent', 'yyyy-MM-dd');
+  var c = { total: 0, 'Квал': 0, 'Не квал': 0, 'Недозвон': 0 };
+  for (var i = 0; i < n; i++) {
+    if (!(dates[i][0] instanceof Date) || Utilities.formatDate(dates[i][0], 'Asia/Tashkent', 'yyyy-MM-dd') !== today) continue;
+    c.total++;
+    if (c[st[i][0]] !== undefined) c[st[i][0]]++;
+  }
+  return '📊 Лидов сегодня: ' + c.total + '\n✅ Квал: ' + c['Квал'] + '\n❌ Не квал: ' + c['Не квал'] + '\n📵 Недозвон: ' + c['Недозвон'] +
+    '\n⏳ Не обработано: ' + (c.total - c['Квал'] - c['Не квал'] - c['Недозвон']);
+}
+
+function tgSend_(chatId, text, replyTo) {
+  var token = PropertiesService.getScriptProperties().getProperty('BOT_TOKEN');
+  if (!token) return;
+  var payload = { chat_id: chatId, text: text, disable_web_page_preview: true };
+  if (replyTo) payload.reply_parameters = { message_id: replyTo, allow_sending_without_reply: true };
+  UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+    method: 'post', contentType: 'application/json', payload: JSON.stringify(payload), muteHttpExceptions: true
+  });
 }
 
 /* =========================== Разбор заявок =========================== */
@@ -365,6 +513,7 @@ function parseStaffBot_(text) {
   };
 }
 
+
 /* =========================== Помощники =========================== */
 
 function normalizePhone(v) {
@@ -413,7 +562,7 @@ function letter_(n) {
 function getOrCreate_(ss, name) { return ss.getSheetByName(name) || ss.insertSheet(name); }
 
 function writeList_(sh, col, title, items) {
-  sh.getRange(1, col).setValue(title).setFontWeight('bold');
+  sh.getRange(1, col).setValue(title).setFontWeight('bold').setBackground('#0F4650').setFontColor('#FFFFFF');
   sh.getRange(2, col, items.length, 1).setValues(items.map(function (x) { return [x]; }));
 }
 
@@ -424,7 +573,7 @@ function validation_(sh, key, listRange, allowOther) {
 
 function styleTable_(s, r1, r2, ncols, c1) {
   c1 = c1 || 1;
-  s.getRange(r1, c1, 1, ncols).setFontWeight('bold').setBackground('#0F4650').setFontColor('#FFFFFF');
+  s.getRange(r1, c1, 1, ncols).setFontWeight('bold').setBackground('#0F4650').setFontColor('#FFFFFF').setWrap(true);
   s.getRange(r1, c1, r2 - r1 + 1, ncols).setBorder(true, true, true, true, true, true, '#D9D9D9', SpreadsheetApp.BorderStyle.SOLID);
 }
 
@@ -432,26 +581,39 @@ function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
-function showWebhookInfo() {
-  var url = ScriptApp.getService().getUrl();
-  var key = PropertiesService.getScriptProperties().getProperty('KEY');
+function digest_(text) {
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, String(text).replace(/\s+/g, ' ').trim(), Utilities.Charset.UTF_8);
+  return bytes.map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
+}
+
+function ensureKey_() {
+  var props = PropertiesService.getScriptProperties();
+  var key = props.getProperty('KEY');
   if (!key) {
     key = Utilities.getUuid().replace(/-/g, '').slice(0, 20);
-    PropertiesService.getScriptProperties().setProperty('KEY', key);
+    props.setProperty('KEY', key);
   }
-  var msg = url
-    ? 'Ссылка для ботов (никому не публикуйте):\n\n' + url + '?key=' + key
-    : 'Сначала разверните скрипт: Развернуть → Новое развёртывание → Веб-приложение (доступ: все). Ключ: ' + key;
-  SpreadsheetApp.getUi().alert(msg);
+  return key;
+}
+
+// Ссылка, по которой боты и сайт могут присылать заявки напрямую (без пересылки)
+function showWebhookInfo() {
+  var url = ScriptApp.getService().getUrl();
+  var key = ensureKey_();
+  SpreadsheetApp.getUi().alert(url
+    ? 'Ссылка для приёма заявок (никому не публикуйте):\n\n' + url + '?key=' + key
+    : 'Сначала разверните скрипт: Развернуть → Новое развёртывание → Веб-приложение (выполнять от: я, доступ: все).');
 }
 
 function addTestLeads() {
   var quiz = '🩺 КВИЗ CHECK-UP\n🩺 Новая заявка на Check-up\n\n👤 Имя: Тест Квиз\n📞 Телефон: +998 90 000 00 01\n🕐 Удобное время: Утро (8:00–12:00)\n🌐 Язык: RU\n\n🎂 Возраст: 40–49 лет\n📅 Последнее обследование: Более года назад\n💡 Мотивация: Хочу проверить здоровье профилактически\n🔍 Проверить в первую очередь: Хочу комплексную проверку\n📍 Город: Ташкент\n\n📊 UTM: source=ig · medium=paid · campaign=120253685775280684 · content=120253687256000684\n📣 Источник: Meta (fbclid)\n🔗 Referrer: https://instagram.com/';
   var bot = '🆕 Заявка #999 · Новая\n\n👤 Тест Бот\n📞 +998900000002\n🩺 Эндокринология\n📍 Telegram-бот\n📣 ru-fb-120253939186340684\n• Telegram: id 6010887956\n• Врач: Ахмедшина Эльмира\n• Язык: Узбекский\n• Когда удобно: Обсудить с администратором';
-  appendLead_(parseText(quiz));
-  appendLead_(parseText(bot));
+  addLead_(parseText(quiz), quiz);
+  addLead_(parseText(bot), bot);
   SpreadsheetApp.getActive().toast('Добавлены 2 тестовые заявки — удалите их после проверки.', 'MEDELA', 6);
 }
 
-// Для проверки разбора вне Google (Node.js)
-if (typeof module !== 'undefined') module.exports = { parseText: parseText, normalizeFields: normalizeFields, normalizePhone: normalizePhone };
+// Для проверки вне Google (Node.js)
+if (typeof module !== 'undefined') {
+  module.exports = { parseText: parseText, normalizeFields: normalizeFields, normalizePhone: normalizePhone };
+}
