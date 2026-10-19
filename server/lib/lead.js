@@ -5,6 +5,8 @@
  * Переменные окружения (задаются только на сервере, никогда во фронтенде):
  *   TELEGRAM_BOT_TOKEN — токен бота от @BotFather
  *   TELEGRAM_CHAT_ID   — id чата/группы менеджеров (например, -1001234567890)
+ *   SHEETS_WEBHOOK_URL — необязательно: ссылка веб-приложения Google Таблицы учёта лидов
+ *                        (leads-sheet/Code.gs, вместе с ?key=...). Каждая заявка добавится строкой.
  *   ALLOWED_ORIGIN     — необязательно: домен квиза, если он отличается от домена функции
  *                        (например, https://quiz.medela.uz). Можно несколько через запятую.
  */
@@ -109,6 +111,21 @@ async function sendToTelegram(text) {
   if (!res.ok || !data.ok) throw new Error('Telegram API error: ' + res.status + ' ' + (data.description || ''));
 }
 
+// Копия заявки в Google Таблицу учёта лидов (если задан SHEETS_WEBHOOK_URL)
+async function sendToSheet(lead) {
+  const url = process.env.SHEETS_WEBHOOK_URL;
+  if (!url) return false;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(Object.assign({ channel: 'Квиз Check-up' }, lead)),
+    signal: AbortSignal.timeout(10000)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error('Sheets error: ' + res.status + ' ' + (data.error || ''));
+  return true;
+}
+
 function corsHeaders(origin) {
   const allowed = (process.env.ALLOWED_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
   if (!origin || !allowed.includes(origin)) return {};
@@ -133,13 +150,17 @@ async function handleLead({ method, origin, body }) {
   if (result.spam) return { status: 200, headers, body: { ok: true } };
   if (result.error) return { status: 400, headers, body: { ok: false, error: result.error } };
 
-  try {
-    await sendToTelegram(buildMessage(result.lead));
-    return { status: 200, headers, body: { ok: true } };
-  } catch (err) {
-    console.error('[lead] ' + err.message);
-    return { status: 502, headers, body: { ok: false, error: 'delivery_failed' } };
-  }
+  // Telegram и таблица — параллельно. Заявка считается принятой, если дошла хотя бы куда-то.
+  const [tg, sheet] = await Promise.allSettled([
+    sendToTelegram(buildMessage(result.lead)),
+    sendToSheet(result.lead)
+  ]);
+  if (tg.status === 'rejected') console.error('[lead] ' + tg.reason.message);
+  if (sheet.status === 'rejected') console.error('[lead] ' + sheet.reason.message);
+
+  const delivered = tg.status === 'fulfilled' || (sheet.status === 'fulfilled' && sheet.value === true);
+  if (!delivered) return { status: 502, headers, body: { ok: false, error: 'delivery_failed' } };
+  return { status: 200, headers, body: { ok: true } };
 }
 
 module.exports = { handleLead, validateLead, buildMessage };

@@ -208,6 +208,10 @@ python3 -m http.server 8080
 
 Ссылка для рекламы: `https://<ваш-домен>/zapis/?lang=ru&utm_source=instagram&utm_content=c1_quiz_ru_4x5`
 
+## Учёт лидов в Google Таблице
+
+Все заявки (квиз, бот записи, звонки) в одной таблице со статусами и сводкой по источникам: см. [`leads-sheet/README.md`](leads-sheet/README.md). Для квиза достаточно добавить переменную окружения `SHEETS_WEBHOOK_URL`.
+
 ## Аналитика (dataLayer и GTM)
 
 Все события отправляются в `window.dataLayer`. Имён и телефонов там **нет**.
