@@ -419,7 +419,6 @@ function normalizeFields(b) {
   if (b.motivation) details.push('Мотивация: ' + b.motivation);
   if (b.details) details.push(b.details);
   var focus = Array.isArray(b.focusAreas) ? b.focusAreas.join(', ') : (b.focusAreas || '');
-  var tag = utmTag_(b);
   return {
     channel: b.channel || 'Квиз Check-up',
     platform: b.platform || detectPlatform_(b.utm_source, b.fbclid, b.referrer),
@@ -432,87 +431,127 @@ function normalizeFields(b) {
     city: clean_(b.city),
     callTime: clean_(b.callTime),
     details: details.join('\n'),
-    tag: tag,
+    tag: utmTag_(b),
     telegramId: clean_(b.telegramId),
     externalId: clean_(b.externalId)
   };
 }
 
-/** Текст сообщения из Telegram-группы. */
+// Синонимы подписей полей (нижний регистр, сравнение по началу подписи)
+var FIELD_LABELS = {
+  name: ['имя', 'фио', 'ism', 'клиент', 'пациент'],
+  phone: ['телефон', 'тел', 'номер', 'phone', 'raqam'],
+  callTime: ['удобное время', 'позвонить', 'когда удобно', 'время звонка', 'когда звонить', 'qulay vaqt'],
+  lang: ['язык', 'til'],
+  city: ['город', 'shahar', 'регион'],
+  doctor: ['врач', 'доктор', 'shifokor'],
+  service: ['проверить в первую очередь', 'услуга', 'направление', 'xizmat', 'что проверить', 'беспокоит', 'жалоб']
+};
+// Подписи, которые разбираются отдельно и не дублируются в «Детали»
+var SKIP_LABELS = ['utm', 'источник', 'referrer', 'реферер', 'получено', 'telegram'];
+
+/**
+ * Разбирает текст заявки любого формата: «Метка: значение», строки с эмодзи (👤 📞 🩺 📍 📣),
+ * UTM-метки (source=…, utm_source=…). Неизвестные поля попадают в «Детали заявки».
+ */
 function parseText(text) {
   text = String(text || '').replace(/\r/g, '');
-  if (/Заявка\s*#\s*\d+/.test(text)) return parseStaffBot_(text);
-  return parseQuiz_(text);
-}
-
-// Формат «КВИЗ CHECK-UP / Новая заявка на Check-up» (поля «Метка: значение»)
-function parseQuiz_(text) {
-  var f = function (label) {
-    var m = new RegExp(label + '\\s*:\\s*([^\\n]+(?:\\n(?![^\\n]*:)[^\\n]+)*)', 'i').exec(text);
-    return m ? m[1].replace(/\s*\n\s*/g, ' ').trim() : '';
-  };
-  var utmLine = f('UTM');
-  var utm = {};
-  utmLine.split('·').forEach(function (part) {
-    var kv = part.split('=');
-    if (kv.length === 2) utm[kv[0].trim()] = kv[1].trim();
-  });
-  var details = [
-    ['Возраст', f('Возраст')], ['Последнее обследование', f('Последнее обследование')], ['Мотивация', f('Мотивация')]
-  ].filter(function (x) { return x[1]; }).map(function (x) { return x[0] + ': ' + x[1]; });
-  return {
-    channel: 'Квиз Check-up',
-    platform: detectPlatform_(utm.source, /fbclid|meta/i.test(f('Источник')) ? 'yes' : '', f('Referrer')),
-    campaign: [utm.campaign, utm.content].filter(Boolean).join(' / '),
-    name: f('Имя'),
-    phone: normalizePhone(f('Телефон')),
-    service: f('Проверить в первую очередь'),
-    lang: f('Язык').toUpperCase(),
-    city: f('Город'),
-    callTime: f('Удобное время'),
-    details: details.join('\n'),
-    tag: utmLine
-  };
-}
-
-// Формат MedelaStaffBot: «Заявка #2 · Новая», строки с эмодзи и «• Поле: значение»
-function parseStaffBot_(text) {
   var lines = text.split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
-  var byEmoji = function (emoji) {
-    for (var i = 0; i < lines.length; i++) if (lines[i].indexOf(emoji) === 0) return lines[i].slice(emoji.length).trim();
+  var lead = { details: '' };
+  var details = [];
+  var used = {};
+
+  var emojiLine = function (emojis) {
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      for (var j = 0; j < emojis.length; j++) {
+        if (l.indexOf(emojis[j]) === 0) {
+          var rest = l.slice(emojis[j].length).replace(/^[️\s]+/, '');
+          if (rest.indexOf(':') === -1 || /^\+?[\d\s()\-]+$/.test(rest)) { used[i] = true; return rest; }
+        }
+      }
+    }
     return '';
   };
-  var bullet = function (label) {
-    var m = new RegExp('[•·-]\\s*' + label + '\\s*:\\s*(.+)', 'i').exec(text);
-    return m ? m[1].trim() : '';
-  };
-  var id = /Заявка\s*#\s*(\d+)/.exec(text);
-  var tag = byEmoji('📣');
-  // Метка вида «ru-fb-120253939186340684» или «ru-svc_uzi-instagram-c3»
-  var parts = tag.split('-');
-  var src = parts.length > 1 ? parts[1] : '';
-  if (/^svc_/.test(src)) src = parts[2] || '';
-  var langWord = bullet('Язык');
-  var lang = /узб|uz/i.test(langWord) ? 'UZ' : (/рус|ru/i.test(langWord) ? 'RU' : (parts[0] || '').toUpperCase());
-  var phone = byEmoji('📞');
-  var tgId = (bullet('Telegram').match(/\d{5,}/) || [''])[0];
-  return {
-    channel: 'Telegram-бот',
-    platform: detectPlatform_(src),
-    campaign: parts.slice(2).join('-').replace(/^svc_[^-]*-?/, ''),
-    name: byEmoji('👤'),
-    phone: normalizePhone(phone),
-    service: byEmoji('🩺'),
-    doctor: bullet('Врач'),
-    lang: lang,
-    callTime: bullet('Когда удобно'),
-    details: byEmoji('📍') ? 'Откуда: ' + byEmoji('📍') : '',
-    tag: tag,
-    telegramId: tgId,
-    externalId: id ? '#' + id[1] : ''
-  };
+
+  // 1) Поля «Метка: значение»
+  lines.forEach(function (line, i) {
+    var m = /^[^A-Za-zА-Яа-яЁё0-9]*([A-Za-zА-Яа-яЁёʻ’'«»\s,\/()\-]{2,45}?)\s*:\s*(.*)$/.exec(line);
+    if (!m) return;
+    var label = m[1].trim().toLowerCase(), value = m[2].trim();
+    if (/^https?$/.test(label)) return;
+    used[i] = true;
+    if (SKIP_LABELS.some(function (s) { return label.indexOf(s) === 0; })) return;
+    var field = Object.keys(FIELD_LABELS).filter(function (f) {
+      return FIELD_LABELS[f].some(function (s) { return label.indexOf(s) === 0; });
+    })[0];
+    if (field && value && !lead[field]) lead[field] = value;
+    else if (value) details.push(m[1].trim() + ': ' + value);
+  });
+
+  // 2) Строки с эмодзи без подписи (формат MedelaStaffBot и похожие)
+  if (!lead.name) lead.name = emojiLine(['👤']);
+  var phoneLine = emojiLine(['📞', '☎️', '☎', '📱']);
+  var serviceLine = '';
+  lines.forEach(function (l, i) {
+    if (!serviceLine && !used[i] && l.indexOf('🩺') === 0 && !/заявк|квиз|check-up|ariza/i.test(l)) {
+      serviceLine = l.replace(/^🩺[️\s]*/, ''); used[i] = true;
+    }
+  });
+  if (!lead.service) lead.service = serviceLine;
+  var from = emojiLine(['📍']);
+  if (from) details.push('Откуда: ' + from);
+  var tag = emojiLine(['📣']);
+
+  // 3) Телефон — где угодно в тексте
+  var phone = lead.phone || phoneLine || findPhone_(text);
+  lead.phone = normalizePhone(phone);
+  if (!lead.phone) lead.phone = normalizePhone(findPhone_(text));
+
+  // 4) Прочие свободные строки: «горячий» лид, хэштеги
+  lines.forEach(function (l, i) {
+    if (used[i]) return;
+    if (/🔥|горяч/i.test(l)) details.unshift(l.replace(/^[^A-Za-zА-Яа-яЁё]+/, '🔥 '));
+    else if (/^#/.test(l)) details.push(l);
+  });
+
+  // 5) Источник: UTM-метки в любом виде, метка бота, fbclid, referrer
+  var utm = {};
+  text.replace(/(?:utm_)?(source|medium|campaign|content|term)\s*=\s*([^\s·,;&]+)/gi, function (_, k, v) {
+    if (!utm[k.toLowerCase()]) utm[k.toLowerCase()] = v; return _;
+  });
+  var tagParts = tag ? tag.split('-') : [];
+  var tagSrc = tagParts.length > 1 ? (/^svc_/.test(tagParts[1]) ? tagParts[2] || '' : tagParts[1]) : '';
+  var referrer = (/(?:referrer|реферер)\s*:\s*(\S+)/i.exec(text) || [])[1] || '';
+  var fbclid = /fbclid/i.test(text) ? 'yes' : '';
+  lead.platform = detectPlatform_(utm.source || tagSrc, fbclid, referrer);
+  lead.campaign = [utm.campaign, utm.content].filter(Boolean).join(' / ') ||
+    (tagParts.length > 2 ? tagParts.slice(2).join('-').replace(/^svc_[^-]*-?/, '') : '');
+  lead.tag = Object.keys(utm).length
+    ? ['source', 'medium', 'campaign', 'content', 'term'].filter(function (k) { return utm[k]; }).map(function (k) { return k + '=' + utm[k]; }).join(' · ')
+    : tag;
+
+  // 6) Канал, язык, номер заявки, Telegram ID
+  var ext = /Заявка\s*#\s*(\d+)/i.exec(text);
+  lead.externalId = ext ? '#' + ext[1] : '';
+  lead.channel = /квиз|quiz|check-up/i.test(text) ? 'Квиз Check-up' : (ext ? 'Telegram-бот' : 'Другое');
+  var lang = String(lead.lang || '').toLowerCase();
+  lead.lang = /узб|uz|o.zbek/i.test(lang) ? 'UZ' : (/рус|ru/i.test(lang) ? 'RU' : (tagParts[0] && tagParts[0].length === 2 ? tagParts[0].toUpperCase() : ''));
+  var tg = /telegram\s*:?\s*(?:id\s*)?(\d{5,})/i.exec(text);
+  lead.telegramId = tg ? tg[1] : '';
+
+  // Свободный текст без полей — сохраняем целиком, чтобы администратор видел всё
+  if (!details.length && !lead.name && !lead.service) details.push(text.slice(0, 1000));
+  lead.details = details.join('\n');
+  Object.keys(lead).forEach(function (k) { if (typeof lead[k] === 'string') lead[k] = lead[k].trim(); });
+  return lead;
 }
 
+// Узбекский номер: +998 (77) 307-71-71, 998901234567, 90 123 45 67 … (не цепляет длинные ID кампаний)
+function findPhone_(text) {
+  var m = /(?:^|[^\d])((?:\+?\s*998[\s\-()]*)?\(?\d{2}\)?[\s\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2})(?!\d)/.exec(String(text || ''));
+  return m ? m[1] : '';
+}
 
 /* =========================== Помощники =========================== */
 
