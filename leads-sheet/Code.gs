@@ -174,6 +174,13 @@ function migrateLeads_(sh) {
   var keyByTitle = {};
   COLUMNS.forEach(function (c) { keyByTitle[c.title] = c.key; });
   Object.keys(OLD_TITLES).forEach(function (t) { keyByTitle[t] = OLD_TITLES[t]; });
+  // Шапка не узнана (пустая или чужая) — ничего не переносим, чтобы не потерять данные
+  var known = oldHeader.filter(function (t) { return keyByTitle[t]; }).length;
+  if (known < 3) return;
+
+  // Резервная копия листа перед переносом — на всякий случай
+  var stamp = Utilities.formatDate(new Date(), TZ, 'dd.MM HH-mm');
+  sh.copyTo(sh.getParent()).setName('Резерв лидов ' + stamp);
 
   var data = lastRow > 1 ? sh.getRange(2, 1, lastRow - 1, lastCol).getValues() : [];
   var rows = data.filter(function (r) { return r.some(function (v) { return v !== ''; }); }).map(function (r) {
@@ -187,6 +194,12 @@ function migrateLeads_(sh) {
     return COLUMNS.map(function (c) { return o[c.key] === undefined ? '' : o[c.key]; });
   });
 
+  // Старые проверки данных и форматирование мешают записи в новые колонки — снимаем их до записи
+  var all = sh.getRange(1, 1, sh.getMaxRows(), Math.max(sh.getMaxColumns(), COLUMNS.length));
+  all.clearDataValidations();
+  sh.setConditionalFormatRules([]);
+  if (sh.getFilter()) sh.getFilter().remove();
+  if (sh.getMaxColumns() < COLUMNS.length) sh.insertColumnsAfter(sh.getMaxColumns(), COLUMNS.length - sh.getMaxColumns());
   sh.getRange(1, 1, lastRow, lastCol).clearContent().clearNote();
   if (rows.length) sh.getRange(2, 1, rows.length, COLUMNS.length).setValues(rows);
 }
