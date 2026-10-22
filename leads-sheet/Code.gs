@@ -14,7 +14,8 @@
  * Установка — в leads-sheet/README.md.
  */
 
-var SHEET_LEADS = 'Лиды';
+var SHEET_LEADS = 'Заявки';
+var OLD_LEADS_NAMES = ['Лиды']; // прошлые названия листа — переименуются в «Заявки»
 var SHEET_SUMMARY = 'Итоги';
 var SHEET_LISTS = 'Списки';
 var TZ = 'Asia/Tashkent';
@@ -68,6 +69,14 @@ var REPEAT_DAYS = 30;
 /* =========================== Меню =========================== */
 
 function onOpen() {
+  // Таблица всегда открывается на листе «Заявки»
+  try {
+    var ss = SpreadsheetApp.getActive();
+    var leads = leadsSheet_(ss);
+    if (leads.getIndex() !== 1) { ss.setActiveSheet(leads); ss.moveActiveSheet(1); }
+    ss.setActiveSheet(leads);
+  } catch (err) { /* не мешаем открытию таблицы */ }
+
   SpreadsheetApp.getUi().createMenu('MEDELA')
     .addItem('1. Настроить / обновить таблицу', 'setup')
     .addItem('2. Подключить Telegram-бота', 'connectTelegramBot')
@@ -85,7 +94,7 @@ function onOpen() {
 function onEdit(e) {
   try {
     var sh = e.range.getSheet();
-    if (sh.getName() !== SHEET_LEADS || e.range.getRow() < 2 || e.range.getNumRows() > 1) return;
+    if ([SHEET_LEADS].concat(OLD_LEADS_NAMES).indexOf(sh.getName()) === -1 || e.range.getRow() < 2 || e.range.getNumRows() > 1) return;
     var col = e.range.getColumn();
     var callCols = ['call1', 'call2', 'call3'].map(colIndex_);
     if (callCols.indexOf(col) === -1) return;
@@ -125,7 +134,7 @@ function setup() {
   lists.getRange('E2:E30').setBackground('#FFF2CC');
   lists.getRange('H1').setValue('Впишите имена операторов в жёлтые ячейки колонки E — они появятся в выпадающем списке «Оператор».').setFontStyle('italic');
 
-  var sh = getOrCreate_(ss, SHEET_LEADS);
+  var sh = leadsSheet_(ss);
   migrateLeads_(sh);
 
   var header = COLUMNS.map(function (c) { return c.title; });
@@ -168,6 +177,7 @@ function setup() {
   var def = ss.getSheetByName('Лист1') || ss.getSheetByName('Sheet1');
   if (def && def.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(def);
   ss.setActiveSheet(sh);
+  ss.moveActiveSheet(1);
   ss.toast('Таблица обновлена. Впишите имена операторов на листе «Списки» (колонка E).', 'MEDELA', 8);
 }
 
@@ -316,7 +326,7 @@ function beautify() {
 
 function beautify_(ss) {
   var line = '#E3E6EA';
-  var sh = ss.getSheetByName(SHEET_LEADS);
+  var sh = leadsSheet_(ss);
   if (sh) {
     var rows = sh.getMaxRows(), cols = COLUMNS.length;
     var all = sh.getRange(1, 1, rows, cols);
@@ -394,7 +404,7 @@ function addLead_(lead, rawText) {
     var cache = CacheService.getScriptCache();
     var hash = rawText ? digest_(rawText) : '';
     if (hash && cache.get('lead_' + hash)) return { ok: true, duplicate: true };
-    var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_LEADS);
+    var sh = leadsSheet_(SpreadsheetApp.getActive());
     if (lead.externalId && findRow_(sh, 'externalId', lead.externalId)) {
       if (hash) cache.put('lead_' + hash, '1', 21600);
       return { ok: true, duplicate: true };
@@ -553,7 +563,7 @@ function handleTelegramUpdate_(update) {
 }
 
 function statsToday_() {
-  var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_LEADS);
+  var sh = leadsSheet_(SpreadsheetApp.getActive());
   if (sh.getLastRow() < 2) return 'Сегодня лидов пока нет.';
   var n = sh.getLastRow() - 1;
   var dates = col_(sh, 'date').offset(1, 0, n).getValues();
@@ -777,6 +787,17 @@ function letter_(n) {
   var s = '';
   while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
   return s;
+}
+
+// Лист с заявками: «Заявки» (старый «Лиды» переименовывается автоматически)
+function leadsSheet_(ss) {
+  var sh = ss.getSheetByName(SHEET_LEADS);
+  if (sh) return sh;
+  for (var i = 0; i < OLD_LEADS_NAMES.length; i++) {
+    var old = ss.getSheetByName(OLD_LEADS_NAMES[i]);
+    if (old) { old.setName(SHEET_LEADS); return old; }
+  }
+  return ss.insertSheet(SHEET_LEADS, 0);
 }
 
 function getOrCreate_(ss, name) { return ss.getSheetByName(name) || ss.insertSheet(name); }
