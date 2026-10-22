@@ -24,7 +24,7 @@ var COLUMNS = [
   { key: 'n', title: '№', width: 45 },
   { key: 'date', title: 'Дата', width: 90 },
   { key: 'time', title: 'Время', width: 60 },
-  { key: 'name', title: 'Имя', width: 170 },
+  { key: 'name', title: 'Имя', width: 210 },
   { key: 'phone', title: 'Телефон', width: 130 },
   { key: 'funnel', title: 'Воронка', width: 160 },
   { key: 'platform', title: 'Площадка', width: 95 },
@@ -48,6 +48,11 @@ var COLUMNS = [
   { key: 'externalId', title: 'ID в системе', width: 90 }
 ];
 // Старые названия колонок (из прошлых версий) — для переноса данных
+// Колонки по центру; остальные — по левому краю. Длинные — обрезаются в ячейке, строка не растягивается.
+var CENTER_KEYS = ['n', 'date', 'time', 'phone', 'platform', 'call1', 'call2', 'call3', 'status', 'repeat', 'lang', 'telegramId', 'externalId'];
+var ROW_HEIGHT = 30;
+var FONT = 'Roboto';
+
 var OLD_TITLES = { 'Дата и время': 'datetime', 'Канал': 'funnel', 'Ответственный': 'operator', 'Услуга': 'service' };
 
 var FUNNELS = ['Квиз Check-up', 'Квиз по самочувствию', 'Бот записи', 'Сайт /zapis', 'Звонок', 'Instagram Direct', 'Telegram (личка)', 'Пришёл сам', 'Другое'];
@@ -66,6 +71,7 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('MEDELA')
     .addItem('1. Настроить / обновить таблицу', 'setup')
     .addItem('2. Подключить Telegram-бота', 'connectTelegramBot')
+    .addItem('Оформить таблицу (без изменения данных)', 'beautify')
     .addSeparator()
     .addItem('Ссылка для приёма заявок от ботов/сайта', 'showWebhookInfo')
     .addItem('Добавить тестовые заявки', 'addTestLeads')
@@ -158,6 +164,7 @@ function setup() {
   sh.getRange(1, 1, sh.getMaxRows(), COLUMNS.length).createFilter();
 
   buildSummary_(ss);
+  beautify_(ss);
   var def = ss.getSheetByName('Лист1') || ss.getSheetByName('Sheet1');
   if (def && def.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(def);
   ss.setActiveSheet(sh);
@@ -297,6 +304,59 @@ function buildSummary_(ss) {
   s.setColumnWidth(12, 24);
   s.setColumnWidth(13, 105);
   s.setFrozenRows(2);
+}
+
+/* =========================== Оформление =========================== */
+
+// Пункт меню: только внешний вид, данные не меняются
+function beautify() {
+  beautify_(SpreadsheetApp.getActive());
+  SpreadsheetApp.getActive().toast('Готово: таблица оформлена.', 'MEDELA', 4);
+}
+
+function beautify_(ss) {
+  var line = '#E3E6EA';
+  var sh = ss.getSheetByName(SHEET_LEADS);
+  if (sh) {
+    var rows = sh.getMaxRows(), cols = COLUMNS.length;
+    var all = sh.getRange(1, 1, rows, cols);
+    all.setFontFamily(FONT).setFontSize(10).setFontColor('#1F2937').setVerticalAlignment('middle')
+      .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+    var body = sh.getRange(2, 1, rows - 1, cols);
+    body.setHorizontalAlignment('left')
+      .setBorder(true, true, true, true, true, true, line, SpreadsheetApp.BorderStyle.SOLID);
+    CENTER_KEYS.forEach(function (k) { col_(sh, k).offset(1, 0, rows - 1).setHorizontalAlignment('center'); });
+    col_(sh, 'status').offset(1, 0, rows - 1).setFontWeight('bold');
+    col_(sh, 'name').offset(1, 0, rows - 1).setFontWeight('bold');
+    sh.setRowHeightsForced(2, rows - 1, ROW_HEIGHT);
+
+    var head = sh.getRange(1, 1, 1, cols);
+    head.setFontFamily(FONT).setFontSize(10).setFontWeight('bold').setFontColor('#FFFFFF').setBackground('#0F4650')
+      .setHorizontalAlignment('center').setVerticalAlignment('middle').setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP)
+      .setBorder(true, true, true, true, true, true, '#0B3740', SpreadsheetApp.BorderStyle.SOLID);
+    ['call1', 'call2', 'call3'].forEach(function (k) { col_(sh, k).setBackground('#2E6B75'); });
+    sh.setRowHeightsForced(1, 1, 42);
+    COLUMNS.forEach(function (c, i) { sh.setColumnWidth(i + 1, c.width); });
+    if (sh.getMaxColumns() > cols) sh.hideColumns(cols + 1, sh.getMaxColumns() - cols);
+    sh.setHiddenGridlines(true);
+  }
+
+  var s = ss.getSheetByName(SHEET_SUMMARY);
+  if (s) {
+    var r = s.getRange(1, 1, s.getMaxRows(), s.getMaxColumns());
+    r.setFontFamily(FONT).setVerticalAlignment('middle');
+    s.getRange(3, 2, s.getMaxRows() - 2, s.getMaxColumns() - 1).setHorizontalAlignment('center');
+    s.setRowHeightsForced(3, s.getMaxRows() - 2, 26);
+    s.setRowHeightsForced(1, 1, 40);
+    s.setHiddenGridlines(true);
+  }
+
+  var l = ss.getSheetByName(SHEET_LISTS);
+  if (l) {
+    l.getRange(1, 1, l.getMaxRows(), l.getMaxColumns()).setFontFamily(FONT).setVerticalAlignment('middle');
+    l.setRowHeightsForced(1, l.getMaxRows(), 26);
+    l.setHiddenGridlines(true);
+  }
 }
 
 /* =========================== Приём заявок =========================== */
