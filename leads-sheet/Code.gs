@@ -266,16 +266,16 @@ function buildSummary_(ss) {
   s.getRange('B2:M2').merge().setValue('Считается автоматически из листа «' + SHEET_LEADS + '». Период меняется в жёлтых ячейках.')
     .setFontColor(MUTED).setFontStyle('italic');
   s.getRange('B4').setValue('Период').setFontWeight('bold').setHorizontalAlignment('right');
-  s.getRange('C4').setFormula('=EOMONTH(TODAY(),-1)+1');
+  s.getRange('C4').setFormula(fx_('=EOMONTH(TODAY(),-1)+1'));
   s.getRange('D4').setValue('—').setHorizontalAlignment('center');
-  s.getRange('E4').setFormula('=TODAY()');
+  s.getRange('E4').setFormula(fx_('=TODAY()'));
   s.getRange('C4:E4').setNumberFormat('dd.mm.yyyy');
   ['C4', 'E4'].forEach(function (a) {
     s.getRange(a).setBackground('#FFF2CC').setFontWeight('bold').setHorizontalAlignment('center')
       .setBorder(true, true, true, true, false, false, '#F1C232', SpreadsheetApp.BorderStyle.SOLID)
       .setNote('Можно вписать любую дату');
   });
-  s.getRange('F4:H4').merge().setFormula('="Сегодня визитов: "&COUNTIF(' + VD + ',TODAY())&" · завтра: "&COUNTIF(' + VD + ',TODAY()+1)')
+  s.getRange('F4:H4').merge().setFormula(fx_('="Сегодня визитов: "&COUNTIF(' + VD + ',TODAY())&" · завтра: "&COUNTIF(' + VD + ',TODAY()+1)'))
     .setFontColor(TEAL).setFontWeight('bold');
   s.setRowHeight(4, 30);
 
@@ -296,9 +296,9 @@ function buildSummary_(ss) {
     var box = s.getRange(6, col, 3, w);
     box.setBackground(t.bg).setBorder(true, true, true, true, false, false, '#FFFFFF', SpreadsheetApp.BorderStyle.SOLID_THICK);
     s.getRange(6, col, 1, w).merge().setValue(t.label).setFontColor(MUTED).setFontWeight('bold').setHorizontalAlignment('center');
-    s.getRange(7, col, 1, w).merge().setFormula(t.value).setFontSize(26).setFontWeight('bold').setFontColor(t.color)
+    s.getRange(7, col, 1, w).merge().setFormula(fx_(t.value)).setFontSize(26).setFontWeight('bold').setFontColor(t.color)
       .setHorizontalAlignment('center').setNumberFormat('0');
-    s.getRange(8, col, 1, w).merge().setFormula(t.sub).setFontColor(MUTED).setHorizontalAlignment('center');
+    s.getRange(8, col, 1, w).merge().setFormula(fx_(t.sub)).setFontColor(MUTED).setHorizontalAlignment('center');
   });
   s.getRange('I6:I8').setBackground(null);
   s.setRowHeight(5, 10);
@@ -318,11 +318,11 @@ function buildSummary_(ss) {
     s.getRange(hr, 2).setHorizontalAlignment('left');
     items.forEach(function (it, i) {
       var r = hr + 1 + i;
-      if (/^=/.test(it)) s.getRange(r, 2).setFormula(it); else s.getRange(r, 2).setValue(it);
+      if (/^=/.test(it)) s.getRange(r, 2).setFormula(fx_(it)); else s.getRange(r, 2).setValue(it);
       cols.forEach(function (f, j) {
         var cell = s.getRange(r, 3 + j), v = f(r);
         if (v === null) return;
-        if (/^=/.test(v)) cell.setFormula(v); else cell.setValue(v);
+        if (/^=/.test(v)) cell.setFormula(fx_(v)); else cell.setValue(v);
       });
     });
     var last = hr + items.length;
@@ -354,9 +354,9 @@ function buildSummary_(ss) {
     function (r) { return '=IFERROR(D' + r + '/C' + r + ',"")'; },
     function (r) { return bar('G' + r, '#6AA84F'); }
   ], { total: function (t, a, b) {
-    ['C', 'D', 'E', 'F'].forEach(function (col) { s.getRange(col + t).setFormula('=SUM(' + col + a + ':' + col + b + ')'); });
-    s.getRange('G' + t).setFormula('=IFERROR(D' + t + '/C' + t + ',"")');
-    s.getRange('H' + t).setFormula(bar('G' + t, '#6AA84F'));
+    ['C', 'D', 'E', 'F'].forEach(function (col) { s.getRange(col + t).setFormula(fx_('=SUM(' + col + a + ':' + col + b + ')')); });
+    s.getRange('G' + t).setFormula(fx_('=IFERROR(D' + t + '/C' + t + ',"")'));
+    s.getRange('H' + t).setFormula(fx_(bar('G' + t, '#6AA84F')));
   } });
   s.getRange(fz.first, 7, fz.last - fz.first + 1, 1).setNumberFormat('0%');
 
@@ -369,10 +369,10 @@ function buildSummary_(ss) {
     function (r) { return '=IF(F' + r + '="","",IFERROR(F' + r + '/C' + r + ',""))'; },
     function (r) { return '=IF(F' + r + '="","",IFERROR(F' + r + '/D' + r + ',""))'; }
   ], { total: function (t, a, b) {
-    ['C', 'D', 'F'].forEach(function (col) { s.getRange(col + t).setFormula('=SUM(' + col + a + ':' + col + b + ')'); });
-    s.getRange('E' + t).setFormula('=IFERROR(D' + t + '/C' + t + ',"")');
-    s.getRange('G' + t).setFormula('=IF(F' + t + '=0,"",IFERROR(F' + t + '/C' + t + ',""))');
-    s.getRange('H' + t).setFormula('=IF(F' + t + '=0,"",IFERROR(F' + t + '/D' + t + ',""))');
+    ['C', 'D', 'F'].forEach(function (col) { s.getRange(col + t).setFormula(fx_('=SUM(' + col + a + ':' + col + b + ')')); });
+    s.getRange('E' + t).setFormula(fx_('=IFERROR(D' + t + '/C' + t + ',"")'));
+    s.getRange('G' + t).setFormula(fx_('=IF(F' + t + '=0,"",IFERROR(F' + t + '/C' + t + ',""))'));
+    s.getRange('H' + t).setFormula(fx_('=IF(F' + t + '=0,"",IFERROR(F' + t + '/D' + t + ',""))'));
   } });
   s.getRange(pz.first, 5, pz.last - pz.first + 1, 1).setNumberFormat('0%');
   s.getRange(pz.first, 6, pz.last - pz.first + 1, 3).setNumberFormat('#,##0');
@@ -402,7 +402,7 @@ function buildSummary_(ss) {
     function (r) { return null; }, function (r) { return null; }, function (r) { return null; }, function (r) { return null; }, function (r) { return null; }
   ]);
   for (var q = rz.first; q <= rz.last; q++) {
-    s.getRange(q, 4, 1, 5).merge().setFormula('=IF(C' + q + '=0,"",SPARKLINE(C' + q + ',{"charttype","bar";"max",MAX($C$' + rz.first + ':$C$' + rz.last + ');"color1","#E06666"}))');
+    s.getRange(q, 4, 1, 5).merge().setFormula(fx_('=IF(C' + q + '=0,"",SPARKLINE(C' + q + ',{"charttype","bar";"max",MAX($C$' + rz.first + ':$C$' + rz.last + ');"color1","#E06666"}))'));
   }
   s.getRange(rz.head, 4, 1, 5).merge();
 
@@ -415,7 +415,7 @@ function buildSummary_(ss) {
   ]);
   s.getRange(vz.first, 2, 7, 1).setNumberFormat('dddd, dd.mm').setHorizontalAlignment('left');
   for (var v = vz.first; v <= vz.last; v++) {
-    s.getRange(v, 4, 1, 5).merge().setFormula('=IF(C' + v + '=0,"",SPARKLINE(C' + v + ',{"charttype","bar";"max",MAX(1,MAX($C$' + vz.first + ':$C$' + vz.last + '));"color1","#237E8C"}))');
+    s.getRange(v, 4, 1, 5).merge().setFormula(fx_('=IF(C' + v + '=0,"",SPARKLINE(C' + v + ',{"charttype","bar";"max",MAX(1,MAX($C$' + vz.first + ':$C$' + vz.last + '));"color1","#237E8C"}))'));
   }
   s.getRange(vz.head, 4, 1, 5).merge();
   s.getRange(vz.first, 2, 1, 2).setFontWeight('bold');
@@ -424,9 +424,9 @@ function buildSummary_(ss) {
   s.getRange('P1:R1').setValues([['День', 'Лиды', 'Квал']]);
   for (var i = 0; i < 14; i++) {
     var r = 2 + i, day = 'TODAY()-' + (13 - i);
-    s.getRange(r, 16).setFormula('=' + day);
-    s.getRange(r, 17).setFormula('=COUNTIFS(' + D + ',' + day + ',' + N + ',"<>")');
-    s.getRange(r, 18).setFormula('=COUNTIFS(' + D + ',' + day + ',' + ST + ',"Квал")');
+    s.getRange(r, 16).setFormula(fx_('=' + day));
+    s.getRange(r, 17).setFormula(fx_('=COUNTIFS(' + D + ',' + day + ',' + N + ',"<>")'));
+    s.getRange(r, 18).setFormula(fx_('=COUNTIFS(' + D + ',' + day + ',' + ST + ',"Квал")'));
   }
   s.getRange('P2:P15').setNumberFormat('dd.mm');
   var chart = s.newChart().setChartType(Charts.ChartType.COLUMN)
@@ -933,6 +933,37 @@ function utmTag_(b) {
   return ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term']
     .filter(function (k) { return b[k]; })
     .map(function (k) { return k.replace('utm_', '') + '=' + b[k]; }).join(' · ');
+}
+
+/**
+ * Формулы в скрипте написаны в английском виде (запятые). В таблицах с русской локалью
+ * разделитель аргументов — «;», а столбцов в массиве {…} — «\». fx_ переводит формулу
+ * под локаль таблицы; текст в кавычках не трогается.
+ */
+function fx_(formula) {
+  var f = String(formula);
+  if (f.charAt(0) !== '=' || !usesCommaDecimal_()) return f;
+  var out = '', stack = [], inStr = false;
+  for (var i = 0; i < f.length; i++) {
+    var ch = f.charAt(i);
+    if (inStr) { out += ch; if (ch === '"') inStr = false; continue; }
+    if (ch === '"') { inStr = true; out += ch; continue; }
+    if (ch === '(' || ch === '{') stack.push(ch);
+    if (ch === ')' || ch === '}') stack.pop();
+    if (ch === ',') { out += stack[stack.length - 1] === '{' ? '\\' : ';'; continue; }
+    out += ch;
+  }
+  return out;
+}
+
+var COMMA_DECIMAL_ = null;
+function usesCommaDecimal_() {
+  if (COMMA_DECIMAL_ === null) {
+    var loc = String(SpreadsheetApp.getActive().getSpreadsheetLocale() || 'en_US').toLowerCase();
+    // Локали с точкой как десятичным разделителем
+    COMMA_DECIMAL_ = !/^(en|ja|zh|ko|th|he|iw|hi|ms|fil|sw)/.test(loc);
+  }
+  return COMMA_DECIMAL_;
 }
 
 function clean_(v) { return String(v === undefined || v === null ? '' : v).trim(); }
