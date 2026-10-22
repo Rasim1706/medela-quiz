@@ -2,7 +2,7 @@
  * MEDELA — учёт лидов в Google Таблице + Telegram-бот для пересылки заявок.
  *
  * Что делает:
- *  • setup()          — создаёт / обновляет листы «Лиды», «Итоги», «Списки»: колонки, выпадающие списки,
+ *  • setup()          — создаёт / обновляет листы «Лиды», «Статистика», «Списки»: колонки, выпадающие списки,
  *                       цвета статусов (Квал / Не квал / Недозвон), Прозвон 1–3 и формулы итогов.
  *                       Если в таблице уже есть заявки, переносит их в новые колонки.
  *  • Telegram-бот     — администратор пересылает боту заявки из группы (можно сразу пачкой),
@@ -15,7 +15,8 @@
  */
 
 var SHEET_LEADS = 'Лиды';
-var SHEET_SUMMARY = 'Итоги';
+var SHEET_SUMMARY = 'Статистика';
+var OLD_SUMMARY_NAME = 'Итоги'; // прошлое название — переименуется
 var SHEET_LISTS = 'Списки';
 var TZ = 'Asia/Tashkent';
 
@@ -34,6 +35,8 @@ var COLUMNS = [
   { key: 'call3', title: 'Прозвон 3', width: 125 },
   { key: 'status', title: 'Статус', width: 95 },
   { key: 'reason', title: 'Причина «не квал»', width: 165 },
+  { key: 'visitDate', title: 'Дата визита', width: 105 },
+  { key: 'visitTime', title: 'Время визита', width: 80 },
   { key: 'operator', title: 'Оператор', width: 130 },
   { key: 'comment', title: 'Комментарий', width: 220 },
   { key: 'repeat', title: 'Повтор', width: 70 },
@@ -49,7 +52,7 @@ var COLUMNS = [
 ];
 // Старые названия колонок (из прошлых версий) — для переноса данных
 // Колонки по центру; остальные — по левому краю. Длинные — обрезаются в ячейке, строка не растягивается.
-var CENTER_KEYS = ['n', 'date', 'time', 'phone', 'platform', 'call1', 'call2', 'call3', 'status', 'repeat', 'lang', 'telegramId', 'externalId'];
+var CENTER_KEYS = ['n', 'date', 'time', 'phone', 'platform', 'call1', 'call2', 'call3', 'status', 'visitDate', 'visitTime', 'repeat', 'lang', 'telegramId', 'externalId'];
 var ROW_HEIGHT = 30;
 var FONT = 'Roboto';
 
@@ -145,6 +148,10 @@ function setup() {
   col_(sh, 'time').offset(1, 0, rows).setNumberFormat('@').setHorizontalAlignment('center');
   col_(sh, 'phone').offset(1, 0, rows).setNumberFormat('@');
   col_(sh, 'status').offset(1, 0, rows).setHorizontalAlignment('center');
+  col_(sh, 'visitDate').offset(1, 0, rows).setNumberFormat('dd.mm.yyyy')
+    .setDataValidation(SpreadsheetApp.newDataValidation().requireDate().setAllowInvalid(false)
+      .setHelpText('Дата, на которую пациент записан. Двойной клик — календарь.').build());
+  col_(sh, 'visitTime').offset(1, 0, rows).setNumberFormat('@');
 
   validation_(sh, 'funnel', lists.getRange('A2:A30'), true);
   validation_(sh, 'platform', lists.getRange('B2:B30'));
@@ -155,11 +162,20 @@ function setup() {
 
   var statusLetter = letter_(colIndex_('status'));
   var range = sh.getRange('A2:' + letter_(COLUMNS.length));
-  sh.setConditionalFormatRules(Object.keys(STATUS_COLORS).map(function (s) {
+  var visitLetter = letter_(colIndex_('visitDate'));
+  var visitCells = sh.getRange(visitLetter + '2:' + letter_(colIndex_('visitTime')));
+  // Визит сегодня — оранжевая ячейка, завтра — светло-оранжевая (правила идут первыми, поверх цвета строки)
+  var visitRules = [
+    SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=$' + visitLetter + '2=TODAY()')
+      .setBackground('#F6B26B').setBold(true).setRanges([visitCells]).build(),
+    SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=$' + visitLetter + '2=TODAY()+1')
+      .setBackground('#FCE5CD').setRanges([visitCells]).build()
+  ];
+  sh.setConditionalFormatRules(visitRules.concat(Object.keys(STATUS_COLORS).map(function (s) {
     return SpreadsheetApp.newConditionalFormatRule()
       .whenFormulaSatisfied('=$' + statusLetter + '2="' + s + '"')
       .setBackground(STATUS_COLORS[s]).setRanges([range]).build();
-  }));
+  })));
   if (sh.getFilter()) sh.getFilter().remove();
   sh.getRange(1, 1, sh.getMaxRows(), COLUMNS.length).createFilter();
 
@@ -212,98 +228,257 @@ function migrateLeads_(sh) {
   if (rows.length) sh.getRange(2, 1, rows.length, COLUMNS.length).setValues(rows);
 }
 
+// Лист «Статистика»: карточки с главными цифрами, график по дням, таблицы с полосками
 function buildSummary_(ss) {
+  var old = ss.getSheetByName(OLD_SUMMARY_NAME);
+  if (old && !ss.getSheetByName(SHEET_SUMMARY)) old.setName(SHEET_SUMMARY);
   var s = getOrCreate_(ss, SHEET_SUMMARY);
+  var spend = readSpend_(s); // расходы на рекламу, которые уже вписали, — сохраняем
+  s.getCharts().forEach(function (ch) { s.removeChart(ch); });
+  s.getRange(1, 1, s.getMaxRows(), s.getMaxColumns()).breakApart();
   s.clear();
+  s.clearConditionalFormatRules();
+  if (s.getMaxColumns() < 18) s.insertColumnsAfter(s.getMaxColumns(), 18 - s.getMaxColumns());
+  s.showColumns(1, s.getMaxColumns());
+
   // В setFormula формулы пишутся с запятыми (английский синтаксис) — Таблица сама покажет их по-русски
   var L = "'" + SHEET_LEADS + "'!";
   var c = function (key) { var l = letter_(colIndex_(key)); return L + '$' + l + '$2:$' + l; };
-  var D = c('date'), N = c('name'), P = c('platform'), F = c('funnel'), ST = c('status'), RS = c('reason'), RP = c('repeat'), OP = c('operator');
-  var period = D + ',">="&$B$2,' + D + ',"<"&$D$2+1';
+  var D = c('date'), N = c('name'), P = c('platform'), F = c('funnel'), ST = c('status'), RS = c('reason'),
+      RP = c('repeat'), OP = c('operator'), VD = c('visitDate');
+  var period = D + ',">="&$C$4,' + D + ',"<"&$E$4+1';
   var cnt = function (cond) { return 'COUNTIFS(' + period + (cond ? ',' + cond : '') + ')'; };
+  var INK = '#1F2937', MUTED = '#6B7280', LINE = '#E3E6EA', TEAL = '#0F4650';
 
-  s.getRange('A1').setValue('Итоги по лидам MEDELA').setFontSize(16).setFontWeight('bold');
-  s.getRange('A2').setValue('Период с');
-  s.getRange('C2').setValue('по');
-  s.getRange('B2').setFormula('=EOMONTH(TODAY(),-1)+1');
-  s.getRange('D2').setFormula('=TODAY()');
-  s.getRange('B2:D2').setNumberFormat('dd.mm.yyyy');
-  ['B2', 'D2'].forEach(function (a) { s.getRange(a).setBackground('#FFF2CC').setFontWeight('bold').setNote('Дату можно поменять вручную'); });
+  s.setHiddenGridlines(true);
+  s.getRange(1, 1, s.getMaxRows(), s.getMaxColumns()).setFontFamily(FONT).setFontSize(10).setFontColor(INK).setVerticalAlignment('middle');
+  s.setColumnWidth(1, 18);
+  s.setColumnWidth(2, 190);
+  s.setColumnWidths(3, 6, 92);   // C–H
+  s.setColumnWidth(9, 24);       // I — отступ
+  s.setColumnWidths(10, 4, 112); // J–M — график
+  s.setColumnWidth(14, 18);
 
-  var head = ['', 'Лиды', 'Без повторов', 'Квал', 'Не квал', 'Недозвон', 'Не обработано', '% квал'];
-  // items — массив значений или функция (i) → формула значения (например, ссылка на лист «Списки»)
-  var block = function (row, title, firstCol, field, items, withSpend) {
-    s.getRange(row - 1, 1).setValue(title).setFontWeight('bold').setFontSize(12);
-    var h = head.slice(); h[0] = firstCol;
-    if (withSpend) h = h.concat(['Расход на рекламу, сум', 'Цена лида', 'Цена квал-лида']);
-    s.getRange(row, 1, 1, h.length).setValues([h]);
+  // Шапка
+  s.getRange('B1:M1').merge().setValue('📊  Статистика по лидам MEDELA')
+    .setBackground(TEAL).setFontColor('#FFFFFF').setFontSize(18).setFontWeight('bold').setHorizontalAlignment('left');
+  s.setRowHeight(1, 52);
+  s.getRange('B2:M2').merge().setValue('Считается автоматически из листа «' + SHEET_LEADS + '». Период меняется в жёлтых ячейках.')
+    .setFontColor(MUTED).setFontStyle('italic');
+  s.getRange('B4').setValue('Период').setFontWeight('bold').setHorizontalAlignment('right');
+  s.getRange('C4').setFormula('=EOMONTH(TODAY(),-1)+1');
+  s.getRange('D4').setValue('—').setHorizontalAlignment('center');
+  s.getRange('E4').setFormula('=TODAY()');
+  s.getRange('C4:E4').setNumberFormat('dd.mm.yyyy');
+  ['C4', 'E4'].forEach(function (a) {
+    s.getRange(a).setBackground('#FFF2CC').setFontWeight('bold').setHorizontalAlignment('center')
+      .setBorder(true, true, true, true, false, false, '#F1C232', SpreadsheetApp.BorderStyle.SOLID)
+      .setNote('Можно вписать любую дату');
+  });
+  s.getRange('F4:H4').merge().setFormula('="Сегодня визитов: "&COUNTIF(' + VD + ',TODAY())&" · завтра: "&COUNTIF(' + VD + ',TODAY()+1)')
+    .setFontColor(TEAL).setFontWeight('bold');
+  s.setRowHeight(4, 30);
+
+  // Карточки (по 2 колонки): подпись · большое число · подпись снизу
+  var total = cnt(N + ',"<>"');
+  var tiles = [
+    { label: 'Всего лидов', value: '=' + total, sub: '="без повторов: "&' + cnt(N + ',"<>",' + RP + ',"<>Повтор"'), color: TEAL, bg: '#E7F1F2' },
+    { label: '✅ Квал', value: '=' + cnt(ST + ',"Квал"'), sub: '=TEXT(IFERROR(' + cnt(ST + ',"Квал"') + '/' + total + ',0),"0%")&" от всех"', color: '#38761D', bg: '#E6F2E1' },
+    { label: '❌ Не квал', value: '=' + cnt(ST + ',"Не квал"'), sub: '=TEXT(IFERROR(' + cnt(ST + ',"Не квал"') + '/' + total + ',0),"0%")&" от всех"', color: '#B00000', bg: '#FBE4E4' },
+    { label: '📵 Недозвон', value: '=' + cnt(ST + ',"Недозвон"'), sub: '=TEXT(IFERROR(' + cnt(ST + ',"Недозвон"') + '/' + total + ',0),"0%")&" от всех"', color: '#1F4E9E', bg: '#E3ECFB' },
+    { label: '⏳ Не обработано', value: '=' + total + '-' + cnt(ST + ',"<>"'), sub: '="ждут звонка"', color: '#7A5A00', bg: '#FFF4D6' },
+    { label: '📅 Записаны на визит', value: '=' + cnt(VD + ',"<>"'), sub: '=TEXT(IFERROR(' + cnt(VD + ',"<>"') + '/' + total + ',0),"0%")&" от всех"', color: TEAL, bg: '#E7F1F2' }
+  ];
+  var tileCols = [2, 3, 5, 7, 10, 12]; // B, C–D, E–F, G–H, J–K, L–M
+  var tileWidth = [1, 2, 2, 2, 2, 2];
+  tiles.forEach(function (t, i) {
+    var col = tileCols[i], w = tileWidth[i];
+    var box = s.getRange(6, col, 3, w);
+    box.setBackground(t.bg).setBorder(true, true, true, true, false, false, '#FFFFFF', SpreadsheetApp.BorderStyle.SOLID_THICK);
+    s.getRange(6, col, 1, w).merge().setValue(t.label).setFontColor(MUTED).setFontWeight('bold').setHorizontalAlignment('center');
+    s.getRange(7, col, 1, w).merge().setFormula(t.value).setFontSize(26).setFontWeight('bold').setFontColor(t.color)
+      .setHorizontalAlignment('center').setNumberFormat('0');
+    s.getRange(8, col, 1, w).merge().setFormula(t.sub).setFontColor(MUTED).setHorizontalAlignment('center');
+  });
+  s.getRange('I6:I8').setBackground(null);
+  s.setRowHeight(5, 10);
+  s.setRowHeight(6, 26);
+  s.setRowHeight(7, 46);
+  s.setRowHeight(8, 24);
+
+  // Таблица-раздел: заголовок раздела, шапка, строки, итог
+  var row = 11;
+  var section = function (title, head, items, cols, opts) {
+    opts = opts || {};
+    s.getRange(row, 2, 1, 7).merge().setValue(title).setFontSize(12).setFontWeight('bold').setFontColor(TEAL);
+    s.setRowHeight(row, 30);
+    var hr = row + 1;
+    s.getRange(hr, 2, 1, head.length).setValues([head]).setFontWeight('bold').setFontColor(MUTED).setBackground('#F3F5F7')
+      .setHorizontalAlignment('center');
+    s.getRange(hr, 2).setHorizontalAlignment('left');
     items.forEach(function (it, i) {
-      var r = row + 1 + i, k = field + ',$A' + r;
-      if (/^=/.test(it)) s.getRange(r, 1).setFormula(it); else s.getRange(r, 1).setValue(it);
-      s.getRange(r, 2).setFormula('=IF($A' + r + '="","",' + cnt(k + ',' + N + ',"<>"') + ')');
-      s.getRange(r, 3).setFormula('=IF($A' + r + '="","",' + cnt(k + ',' + N + ',"<>",' + RP + ',"<>Повтор"') + ')');
-      s.getRange(r, 4).setFormula('=IF($A' + r + '="","",' + cnt(k + ',' + ST + ',"Квал"') + ')');
-      s.getRange(r, 5).setFormula('=IF($A' + r + '="","",' + cnt(k + ',' + ST + ',"Не квал"') + ')');
-      s.getRange(r, 6).setFormula('=IF($A' + r + '="","",' + cnt(k + ',' + ST + ',"Недозвон"') + ')');
-      s.getRange(r, 7).setFormula('=IF($A' + r + '="","",B' + r + '-D' + r + '-E' + r + '-F' + r + ')');
-      s.getRange(r, 8).setFormula('=IF($A' + r + '="","",IFERROR(D' + r + '/B' + r + ',0))');
-      if (withSpend) {
-        s.getRange(r, 9).setBackground('#FFF2CC');
-        s.getRange(r, 10).setFormula('=IF(I' + r + '="","",IFERROR(I' + r + '/B' + r + ',""))');
-        s.getRange(r, 11).setFormula('=IF(I' + r + '="","",IFERROR(I' + r + '/D' + r + ',""))');
-      }
+      var r = hr + 1 + i;
+      if (/^=/.test(it)) s.getRange(r, 2).setFormula(it); else s.getRange(r, 2).setValue(it);
+      cols.forEach(function (f, j) {
+        var cell = s.getRange(r, 3 + j), v = f(r);
+        if (v === null) return;
+        if (/^=/.test(v)) cell.setFormula(v); else cell.setValue(v);
+      });
     });
-    var t = row + 1 + items.length;
-    s.getRange(t, 1).setValue('Итого');
-    ['B', 'C', 'D', 'E', 'F', 'G'].concat(withSpend ? ['I'] : []).forEach(function (col) {
-      s.getRange(col + t).setFormula('=SUM(' + col + (row + 1) + ':' + col + (t - 1) + ')');
-    });
-    s.getRange('H' + t).setFormula('=IFERROR(D' + t + '/B' + t + ',0)');
-    if (withSpend) {
-      s.getRange('J' + t).setFormula('=IF(I' + t + '=0,"",IFERROR(I' + t + '/B' + t + ',""))');
-      s.getRange('K' + t).setFormula('=IF(I' + t + '=0,"",IFERROR(I' + t + '/D' + t + ',""))');
-      s.getRange(row + 1, 9, items.length + 1, 3).setNumberFormat('#,##0');
+    var last = hr + items.length;
+    if (opts.total) {
+      last++;
+      s.getRange(last, 2).setValue('Итого');
+      opts.total(last, hr + 1, last - 1);
+      s.getRange(last, 2, 1, head.length).setFontWeight('bold').setBackground('#F3F5F7');
     }
-    s.getRange(row + 1, 8, items.length + 1, 1).setNumberFormat('0%');
-    styleTable_(s, row, t, h.length);
-    s.getRange(t, 1, 1, h.length).setFontWeight('bold');
-    return t;
+    var body = s.getRange(hr, 2, last - hr + 1, head.length);
+    body.setBorder(true, false, true, false, false, true, LINE, SpreadsheetApp.BorderStyle.SOLID);
+    s.getRange(hr + 1, 3, last - hr, head.length - 1).setHorizontalAlignment('center');
+    s.setRowHeights(hr, last - hr + 1, 26);
+    var top = row;
+    row = last + 3;
+    return { top: top, head: hr, first: hr + 1, last: last };
   };
+  var bar = function (ref, color, max) {
+    return '=IF(OR(' + ref + '="",' + ref + '=0),"",SPARKLINE(' + ref + ',{"charttype","bar";"max",' + (max || 1) + ';"color1","' + color + '"}))';
+  };
+  var blank = function (r, expr) { return '=IF($B' + r + '="","",' + expr + ')'; };
 
-  var end1 = block(5, 'По воронкам', 'Воронка', F, FUNNELS, false);
-  var end2 = block(end1 + 4, 'По площадкам (реклама)', 'Площадка', P, PLATFORMS, true);
+  // 1. По воронкам
+  var fz = section('По воронкам', ['Воронка', 'Лиды', 'Квал', 'Не квал', 'Недозвон', '% квал', 'Доля квал'], FUNNELS, [
+    function (r) { return blank(r, cnt(F + ',$B' + r + ',' + N + ',"<>"')); },
+    function (r) { return blank(r, cnt(F + ',$B' + r + ',' + ST + ',"Квал"')); },
+    function (r) { return blank(r, cnt(F + ',$B' + r + ',' + ST + ',"Не квал"')); },
+    function (r) { return blank(r, cnt(F + ',$B' + r + ',' + ST + ',"Недозвон"')); },
+    function (r) { return '=IFERROR(D' + r + '/C' + r + ',"")'; },
+    function (r) { return bar('G' + r, '#6AA84F'); }
+  ], { total: function (t, a, b) {
+    ['C', 'D', 'E', 'F'].forEach(function (col) { s.getRange(col + t).setFormula('=SUM(' + col + a + ':' + col + b + ')'); });
+    s.getRange('G' + t).setFormula('=IFERROR(D' + t + '/C' + t + ',"")');
+    s.getRange('H' + t).setFormula(bar('G' + t, '#6AA84F'));
+  } });
+  s.getRange(fz.first, 7, fz.last - fz.first + 1, 1).setNumberFormat('0%');
+
+  // 2. Реклама по площадкам
+  var pz = section('Реклама по площадкам', ['Площадка', 'Лиды', 'Квал', '% квал', 'Расход, сум', 'Цена лида', 'Цена квал'], PLATFORMS, [
+    function (r) { return blank(r, cnt(P + ',$B' + r + ',' + N + ',"<>"')); },
+    function (r) { return blank(r, cnt(P + ',$B' + r + ',' + ST + ',"Квал"')); },
+    function (r) { return '=IFERROR(D' + r + '/C' + r + ',"")'; },
+    function (r) { return null; },
+    function (r) { return '=IF(F' + r + '="","",IFERROR(F' + r + '/C' + r + ',""))'; },
+    function (r) { return '=IF(F' + r + '="","",IFERROR(F' + r + '/D' + r + ',""))'; }
+  ], { total: function (t, a, b) {
+    ['C', 'D', 'F'].forEach(function (col) { s.getRange(col + t).setFormula('=SUM(' + col + a + ':' + col + b + ')'); });
+    s.getRange('E' + t).setFormula('=IFERROR(D' + t + '/C' + t + ',"")');
+    s.getRange('G' + t).setFormula('=IF(F' + t + '=0,"",IFERROR(F' + t + '/C' + t + ',""))');
+    s.getRange('H' + t).setFormula('=IF(F' + t + '=0,"",IFERROR(F' + t + '/D' + t + ',""))');
+  } });
+  s.getRange(pz.first, 5, pz.last - pz.first + 1, 1).setNumberFormat('0%');
+  s.getRange(pz.first, 6, pz.last - pz.first + 1, 3).setNumberFormat('#,##0');
+  PLATFORMS.forEach(function (p, i) {
+    var cell = s.getRange(pz.first + i, 6);
+    cell.setBackground('#FFF2CC');
+    if (spend[p] !== undefined) cell.setValue(spend[p]);
+  });
+  s.getRange(pz.top, 2, 1, 7).setNote('Впишите расход на рекламу за период в жёлтые ячейки — посчитается цена лида и цена квал-лида.');
+
+  // 3. По операторам (имена — с листа «Списки»)
   var opItems = [];
   for (var o = 0; o < 8; o++) opItems.push("=IF('" + SHEET_LISTS + "'!E" + (o + 2) + "=\"\",\"\",'" + SHEET_LISTS + "'!E" + (o + 2) + ')');
-  var end3 = block(end2 + 4, 'По операторам', 'Оператор', OP, opItems, false);
+  var oz = section('По операторам', ['Оператор', 'Лиды', 'Квал', 'Не квал', 'Недозвон', '% квал', 'Доля квал'], opItems, [
+    function (r) { return blank(r, cnt(OP + ',$B' + r + ',' + N + ',"<>"')); },
+    function (r) { return blank(r, cnt(OP + ',$B' + r + ',' + ST + ',"Квал"')); },
+    function (r) { return blank(r, cnt(OP + ',$B' + r + ',' + ST + ',"Не квал"')); },
+    function (r) { return blank(r, cnt(OP + ',$B' + r + ',' + ST + ',"Недозвон"')); },
+    function (r) { return '=IF($B' + r + '="","",IFERROR(D' + r + '/C' + r + ',""))'; },
+    function (r) { return bar('G' + r, '#6AA84F'); }
+  ]);
+  s.getRange(oz.first, 7, oz.last - oz.first + 1, 1).setNumberFormat('0%');
 
-  var q0 = end3 + 4;
-  s.getRange(q0 - 1, 1).setValue('Причины «не квал»').setFontWeight('bold').setFontSize(12);
-  s.getRange(q0, 1, 1, 2).setValues([['Причина', 'Лиды']]);
-  REASONS.forEach(function (rs, i) {
-    var r = q0 + 1 + i;
-    s.getRange(r, 1).setValue(rs);
-    s.getRange(r, 2).setFormula('=' + cnt(ST + ',"Не квал",' + RS + ',$A' + r));
-  });
-  styleTable_(s, q0, q0 + REASONS.length, 2);
-
-  // По дням — последние 14 дней (колонки M–O)
-  var d0 = 5, dc = 13;
-  s.getRange(d0 - 1, dc).setValue('Последние 14 дней').setFontWeight('bold').setFontSize(12);
-  s.getRange(d0, dc, 1, 3).setValues([['День', 'Лиды', 'Квал']]);
-  for (var i = 0; i < 14; i++) {
-    var r = d0 + 1 + i;
-    s.getRange(r, dc).setFormula('=TODAY()-' + i);
-    s.getRange(r, dc + 1).setFormula('=COUNTIFS(' + D + ',M' + r + ',' + N + ',"<>")');
-    s.getRange(r, dc + 2).setFormula('=COUNTIFS(' + D + ',M' + r + ',' + ST + ',"Квал")');
+  // 4. Причины «не квал»
+  var rz = section('Причины «не квал»', ['Причина', 'Лиды', '', '', '', '', ''], REASONS, [
+    function (r) { return '=' + cnt(ST + ',"Не квал",' + RS + ',$B' + r); },
+    function (r) { return null; }, function (r) { return null; }, function (r) { return null; }, function (r) { return null; }, function (r) { return null; }
+  ]);
+  for (var q = rz.first; q <= rz.last; q++) {
+    s.getRange(q, 4, 1, 5).merge().setFormula('=IF(C' + q + '=0,"",SPARKLINE(C' + q + ',{"charttype","bar";"max",MAX($C$' + rz.first + ':$C$' + rz.last + ');"color1","#E06666"}))');
   }
-  s.getRange(d0 + 1, dc, 14, 1).setNumberFormat('dd.mm ddd');
-  styleTable_(s, d0, d0 + 14, 3, dc);
+  s.getRange(rz.head, 4, 1, 5).merge();
 
-  s.setColumnWidth(1, 190);
-  s.setColumnWidths(2, 10, 105);
-  s.setColumnWidth(12, 24);
-  s.setColumnWidth(13, 105);
-  s.setFrozenRows(2);
+  // 5. Записи на визит — ближайшие 7 дней (по дате визита, без учёта периода)
+  var days = [];
+  for (var d = 0; d < 7; d++) days.push('=TODAY()+' + d);
+  var vz = section('Записи на визит — ближайшие 7 дней', ['День', 'Визитов', '', '', '', '', ''], days, [
+    function (r) { return '=COUNTIF(' + VD + ',$B' + r + ')'; },
+    function (r) { return null; }, function (r) { return null; }, function (r) { return null; }, function (r) { return null; }, function (r) { return null; }
+  ]);
+  s.getRange(vz.first, 2, 7, 1).setNumberFormat('dddd, dd.mm').setHorizontalAlignment('left');
+  for (var v = vz.first; v <= vz.last; v++) {
+    s.getRange(v, 4, 1, 5).merge().setFormula('=IF(C' + v + '=0,"",SPARKLINE(C' + v + ',{"charttype","bar";"max",MAX(1,MAX($C$' + vz.first + ':$C$' + vz.last + '));"color1","#237E8C"}))');
+  }
+  s.getRange(vz.head, 4, 1, 5).merge();
+  s.getRange(vz.first, 2, 1, 2).setFontWeight('bold');
+
+  // График «Лиды по дням» (14 дней) справа; данные — в скрытых колонках P–R
+  s.getRange('P1:R1').setValues([['День', 'Лиды', 'Квал']]);
+  for (var i = 0; i < 14; i++) {
+    var r = 2 + i, day = 'TODAY()-' + (13 - i);
+    s.getRange(r, 16).setFormula('=' + day);
+    s.getRange(r, 17).setFormula('=COUNTIFS(' + D + ',' + day + ',' + N + ',"<>")');
+    s.getRange(r, 18).setFormula('=COUNTIFS(' + D + ',' + day + ',' + ST + ',"Квал")');
+  }
+  s.getRange('P2:P15').setNumberFormat('dd.mm');
+  var chart = s.newChart().setChartType(Charts.ChartType.COLUMN)
+    .addRange(s.getRange('P1:Q15'))
+    .setNumHeaders(1)
+    .setPosition(fz.top, 10, 0, 0)
+    .setOption('title', 'Лиды по дням (14 дней)')
+    .setOption('titleTextStyle', { color: INK, fontSize: 13, bold: true })
+    .setOption('legend', { position: 'none' })
+    .setOption('colors', ['#237E8C'])
+    .setOption('bar', { groupWidth: '70%' })
+    .setOption('vAxis', { minValue: 0, format: '0', gridlines: { color: '#EEF0F2' }, textStyle: { color: MUTED } })
+    .setOption('hAxis', { textStyle: { color: MUTED, fontSize: 9 }, format: 'dd.MM' })
+    .setOption('backgroundColor', '#FFFFFF')
+    .setOption('width', 450).setOption('height', 300)
+    .build();
+  s.insertChart(chart);
+  var chart2 = s.newChart().setChartType(Charts.ChartType.COLUMN)
+    .addRange(s.getRange('P1:P15')).addRange(s.getRange('R1:R15'))
+    .setNumHeaders(1)
+    .setPosition(pz.top, 10, 0, 0)
+    .setOption('title', 'Квал-лиды по дням (14 дней)')
+    .setOption('titleTextStyle', { color: INK, fontSize: 13, bold: true })
+    .setOption('legend', { position: 'none' })
+    .setOption('colors', ['#38761D'])
+    .setOption('bar', { groupWidth: '70%' })
+    .setOption('vAxis', { minValue: 0, format: '0', gridlines: { color: '#EEF0F2' }, textStyle: { color: MUTED } })
+    .setOption('hAxis', { textStyle: { color: MUTED, fontSize: 9 }, format: 'dd.MM' })
+    .setOption('backgroundColor', '#FFFFFF')
+    .setOption('width', 450).setOption('height', 300)
+    .build();
+  s.insertChart(chart2);
+  s.hideColumns(16, 3);
+
+  s.setFrozenRows(0);
+  s.setTabColor(TEAL);
+}
+
+// Расходы на рекламу из прошлой версии листа: {площадка: сумма}
+function readSpend_(s) {
+  var out = {};
+  if (s.getLastRow() < 2) return out;
+  var vals = s.getRange(1, 1, s.getLastRow(), Math.min(s.getLastColumn(), 14)).getValues();
+  var spendCol = -1;
+  vals.forEach(function (row) {
+    row.forEach(function (v, j) { if (/^Расход/.test(String(v))) spendCol = j; });
+    if (spendCol < 0) return;
+    for (var j = 0; j < row.length; j++) {
+      if (PLATFORMS.indexOf(row[j]) !== -1 && typeof row[spendCol] === 'number') { out[row[j]] = row[spendCol]; break; }
+    }
+  });
+  return out;
 }
 
 /* =========================== Оформление =========================== */
@@ -341,15 +516,7 @@ function beautify_(ss) {
     sh.setHiddenGridlines(true);
   }
 
-  var s = ss.getSheetByName(SHEET_SUMMARY);
-  if (s) {
-    var r = s.getRange(1, 1, s.getMaxRows(), s.getMaxColumns());
-    r.setFontFamily(FONT).setVerticalAlignment('middle');
-    s.getRange(3, 2, s.getMaxRows() - 2, s.getMaxColumns() - 1).setHorizontalAlignment('center');
-    s.setRowHeightsForced(3, s.getMaxRows() - 2, 26);
-    s.setRowHeightsForced(1, 1, 40);
-    s.setHiddenGridlines(true);
-  }
+  // Лист «Статистика» оформляется при сборке (buildSummary_)
 
   var l = ss.getSheetByName(SHEET_LISTS);
   if (l) {
@@ -558,15 +725,19 @@ function statsToday_() {
   var n = sh.getLastRow() - 1;
   var dates = col_(sh, 'date').offset(1, 0, n).getValues();
   var st = col_(sh, 'status').offset(1, 0, n).getValues();
+  var vd = col_(sh, 'visitDate').offset(1, 0, n).getValues();
   var today = Utilities.formatDate(new Date(), 'Asia/Tashkent', 'yyyy-MM-dd');
   var c = { total: 0, 'Квал': 0, 'Не квал': 0, 'Недозвон': 0 };
+  var visits = 0;
   for (var i = 0; i < n; i++) {
+    if (vd[i][0] instanceof Date && Utilities.formatDate(vd[i][0], TZ, 'yyyy-MM-dd') === today) visits++;
     if (!(dates[i][0] instanceof Date) || Utilities.formatDate(dates[i][0], 'Asia/Tashkent', 'yyyy-MM-dd') !== today) continue;
     c.total++;
     if (c[st[i][0]] !== undefined) c[st[i][0]]++;
   }
   return '📊 Лидов сегодня: ' + c.total + '\n✅ Квал: ' + c['Квал'] + '\n❌ Не квал: ' + c['Не квал'] + '\n📵 Недозвон: ' + c['Недозвон'] +
-    '\n⏳ Не обработано: ' + (c.total - c['Квал'] - c['Не квал'] - c['Недозвон']);
+    '\n⏳ Не обработано: ' + (c.total - c['Квал'] - c['Не квал'] - c['Недозвон']) +
+    '\n\n📅 Визитов сегодня: ' + visits;
 }
 
 function tgSend_(chatId, text, replyTo) {
