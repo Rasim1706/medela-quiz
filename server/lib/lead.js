@@ -38,6 +38,13 @@ function validateLead(body) {
 
   const lead = {
     lang: LANGS.includes(body.lang) ? body.lang : 'ru',
+    quiz: clean(body.quiz, 40) || 'checkup',
+    funnel: clean(body.funnel, 60) || 'Квиз Check-up',
+    // Универсальные ответы любого квиза: [{question, answer}]
+    answers: Array.isArray(body.answers)
+      ? body.answers.slice(0, 15).map((a) => ({ question: clean(a && a.question, 80), answer: clean(a && a.answer, 300) }))
+        .filter((a) => a.question && a.answer)
+      : [],
     age: clean(body.age, 60),
     lastCheckup: clean(body.lastCheckup, 120),
     motivation: clean(body.motivation, 200),
@@ -69,6 +76,27 @@ function buildMessage(lead) {
     .filter((k) => lead[k])
     .map((k) => k.replace('utm_', '') + '=' + lead[k])
     .join(' · ');
+
+  // Квизы, кроме Check-up: заголовок = воронка, ответы — списком «Вопрос: ответ».
+  // Первая строка (название воронки) по ней таблица лидов определяет колонку «Воронка».
+  if (lead.quiz !== 'checkup' && lead.answers.length) {
+    return [
+      '🩺 <b>' + escapeHtml(lead.funnel) + '</b>',
+      '🆕 Новая заявка',
+      '',
+      line('👤', 'Имя', lead.name),
+      line('📞', 'Телефон', formatPhone(lead.phone)),
+      line('🕐', 'Удобное время', lead.callTime),
+      '🌐 <b>Язык:</b> ' + lead.lang.toUpperCase(),
+      ''
+    ].concat(lead.answers.map((a) => '▫️ <b>' + escapeHtml(a.question) + ':</b> ' + escapeHtml(a.answer)), [
+      '',
+      line('📊', 'UTM', utm),
+      lead.fbclid ? '📣 <b>Источник:</b> Meta (fbclid)' : null,
+      line('🔗', 'Referrer', lead.referrer),
+      line('🗓', 'Получено', time + ' (Ташкент)')
+    ]).filter((r) => r !== null).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
 
   const rows = [
     '🩺 <b>Новая заявка на Check-up</b>',

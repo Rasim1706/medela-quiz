@@ -58,7 +58,7 @@ var FONT = 'Roboto';
 
 var OLD_TITLES = { 'Дата и время': 'datetime', 'Канал': 'funnel', 'Ответственный': 'operator', 'Услуга': 'service' };
 
-var FUNNELS = ['Квиз Check-up', 'Квиз по самочувствию', 'Бот записи', 'Сайт /zapis', 'Звонок', 'Instagram Direct', 'Telegram (личка)', 'Пришёл сам', 'Другое'];
+var FUNNELS = ['Квиз Check-up', 'Квиз Гинеколог', 'Квиз Эндокринолог', 'Квиз по самочувствию', 'Бот записи', 'Сайт /zapis', 'Звонок', 'Instagram Direct', 'Telegram (личка)', 'Пришёл сам', 'Другое'];
 var PLATFORMS = ['Instagram', 'Facebook', 'Meta', 'Telegram', 'Google', 'Органика', 'Не определено'];
 var CALL_RESULTS = ['✅ Дозвонился', '📵 Не взял трубку', '🔕 Выключен / недоступен', '⏰ Просил перезвонить', '❌ Неверный номер'];
 var STATUSES = ['Квал', 'Не квал', 'Недозвон'];
@@ -760,6 +760,16 @@ function normalizeFields(b) {
   if (b.motivation) details.push('Мотивация: ' + b.motivation);
   if (b.details) details.push(b.details);
   var focus = Array.isArray(b.focusAreas) ? b.focusAreas.join(', ') : (b.focusAreas || '');
+  // Универсальные ответы квиза: [{question, answer}] — «Услуга»/«Беспокоит» в колонку услуги, остальное в детали
+  if (Array.isArray(b.answers) && b.quiz && b.quiz !== 'checkup') {
+    details = [];
+    b.answers.forEach(function (a) {
+      if (!a || !a.answer) return;
+      if (!focus && /^(услуга|беспокоит)/i.test(a.question)) focus = a.answer;
+      else if (/^город/i.test(a.question)) b.city = b.city || a.answer;
+      else details.push(a.question + ': ' + a.answer);
+    });
+  }
   return {
     funnel: b.funnel || b.channel || 'Квиз Check-up',
     platform: b.platform || detectPlatform_(b.utm_source, b.fbclid, b.referrer),

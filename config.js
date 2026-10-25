@@ -43,7 +43,8 @@ window.MEDELA_CONFIG = {
   // Куда отправлять заявку (POST, JSON). Пустая строка — режим разработки:
   // заявка выводится в консоль, а пользователь видит экран «Спасибо».
   // Для serverless-функции из папки server/ укажите '/api/lead'.
-  leadEndpoint: '',
+  // Сейчас: '/api/lead' — функция из server/ (нужны переменные TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в Vercel).
+  leadEndpoint: '/api/lead',
   requestTimeoutMs: 15000,
 
   // Google Tag Manager. Пустая строка — GTM не подключается.

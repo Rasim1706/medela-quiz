@@ -1,6 +1,8 @@
 /**
- * Квиз MEDELA «Какой Check-up подходит именно вам?»
- * Чистый JavaScript без зависимостей. Все тексты — в i18n.js, настройки — в config.js.
+ * Движок квизов MEDELA. Чистый JavaScript без зависимостей.
+ * Общие тексты — в i18n.js, настройки — в config.js.
+ * Квиз по умолчанию — «Какой Check-up подходит именно вам?». Другие квизы (Гинеколог, Эндокринолог)
+ * задают window.MEDELA_QUIZ (вопросы, название воронки) и свои тексты в отдельном файле quiz.js.
  */
 (function () {
   'use strict';
@@ -8,11 +10,11 @@
   var CONFIG = window.MEDELA_CONFIG || {};
   var I18N = window.I18N || {};
   var LANGS = ['ru', 'uz'];
-  var TOTAL_STEPS = 6;
   var AUTO_ADVANCE_MS = 220;
 
-  // Порядок вопросов и машинные коды вариантов. Тексты вариантов — в i18n.js.
-  var QUESTIONS = [
+  // Порядок вопросов и машинные коды вариантов. Тексты вариантов — в i18n.js (или в quiz.js страницы).
+  // label — короткая подпись вопроса в заявке для менеджеров (на русском).
+  var DEFAULT_QUESTIONS = [
     { key: 'age', type: 'single', options: ['under30', '30_39', '40_49', '50_59', '60_69', '70plus'] },
     { key: 'lastCheckup', type: 'single', options: ['within6m', '6_12m', 'over1y', 'dont_remember', 'never'] },
     {
@@ -30,6 +32,11 @@
       hintFor: function (code) { return code && code !== 'tashkent' ? 'notTashkent' : null; }
     }
   ];
+  var QUIZ = window.MEDELA_QUIZ || { id: 'checkup', funnel: 'Квиз Check-up', questions: DEFAULT_QUESTIONS };
+  var QUESTIONS = QUIZ.questions;
+  var TOTAL_STEPS = QUESTIONS.length + 1; // вопросы + форма
+
+  function isExclusive(q, code) { return [].concat(q.exclusive || []).indexOf(code) !== -1; }
   var CALL_TIMES = ['morning', 'day', 'evening', 'any'];
   var TRACKING_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid'];
   var PHONE_PREFIX = '+998';
@@ -52,7 +59,7 @@
     lang: null,
     screen: 'lang', // lang | start | question | form | thanks
     step: 1,        // 1–5 вопросы, 6 — форма
-    answers: { age: null, lastCheckup: null, motivation: null, focusAreas: [], city: null },
+    answers: QUESTIONS.reduce(function (a, q) { a[q.key] = q.type === 'multi' ? [] : null; return a; }, {}),
     form: { name: '', phoneDigits: '', callTime: 'any', consent: false, honeypot: '' },
     touched: {},
     status: 'idle', // idle | sending | error
@@ -95,7 +102,8 @@
   // Какие события дублируются в Meta Pixel. Ответы квиза (здоровье, возраст, город) в Meta
   // не передаём: это чувствительные данные, Meta ограничивает за них пиксель.
   // Название воронки — одинаковое в пикселе и в таблице лидов (колонка «Воронка»)
-  var FUNNEL_NAME = 'Квиз Check-up';
+  var FUNNEL_NAME = QUIZ.funnel;
+  var STORAGE_KEY = CONFIG.storageKey + (QUIZ.id === 'checkup' ? '' : '_' + QUIZ.id);
 
   var PIXEL_EVENTS = {
     quiz_start: ['trackCustom', 'QuizStart'],
@@ -124,13 +132,13 @@
 
   function saveProgress() {
     try {
-      localStorage.setItem(CONFIG.storageKey, JSON.stringify({ answers: state.answers, savedAt: Date.now() }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ answers: state.answers, savedAt: Date.now() }));
     } catch (e) { /* хранилище недоступно — работаем только в памяти */ }
   }
 
   function loadProgress() {
     try {
-      var raw = localStorage.getItem(CONFIG.storageKey);
+      var raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return;
       var data = JSON.parse(raw);
       var ttl = (CONFIG.storageTtlHours || 72) * 3600 * 1000;
@@ -147,7 +155,7 @@
   }
 
   function clearProgress() {
-    try { localStorage.removeItem(CONFIG.storageKey); } catch (e) { /* ничего */ }
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ничего */ }
   }
 
   /* ---------- Инициализация окружения ---------- */
@@ -487,10 +495,10 @@
     var idx = selected.indexOf(code);
     if (idx !== -1) {
       selected.splice(idx, 1);
-    } else if (code === q.exclusive) {
+    } else if (isExclusive(q, code)) {
       selected = [code];
     } else {
-      selected = selected.filter(function (c) { return c !== q.exclusive; });
+      selected = selected.filter(function (c) { return !isExclusive(q, c); });
       selected.push(code);
     }
     state.answers[q.key] = q.options.filter(function (c) { return selected.indexOf(c) !== -1; });
@@ -778,23 +786,22 @@
     var f = state.form;
     var payload = {
       lang: state.lang,
-      age: ruLabel('age', a.age),
-      lastCheckup: ruLabel('lastCheckup', a.lastCheckup),
-      motivation: ruLabel('motivation', a.motivation),
-      focusAreas: a.focusAreas.map(function (c) { return ruLabel('focusAreas', c); }),
-      city: ruLabel('city', a.city),
+      quiz: QUIZ.id,
+      funnel: QUIZ.funnel,
       name: f.name.trim().replace(/\s+/g, ' '),
       phone: PHONE_PREFIX + f.phoneDigits,
       callTime: I18N.ru.form.callTime[f.callTime],
-      codes: {
-        age: a.age,
-        lastCheckup: a.lastCheckup,
-        motivation: a.motivation,
-        focusAreas: a.focusAreas.slice(),
-        city: a.city,
-        callTime: f.callTime
-      }
+      answers: [],
+      codes: { callTime: f.callTime }
     };
+    // Ответы — человекочитаемо на русском (для менеджеров) + машинные коды
+    QUESTIONS.forEach(function (q) {
+      var v = a[q.key];
+      var ru = Array.isArray(v) ? v.map(function (c) { return ruLabel(q.key, c); }) : ruLabel(q.key, v);
+      payload[q.key] = ru;
+      payload.codes[q.key] = Array.isArray(v) ? v.slice() : v;
+      payload.answers.push({ key: q.key, question: q.label || I18N.ru.questions[q.key].title, answer: Array.isArray(ru) ? ru.join(', ') : ru });
+    });
     TRACKING_KEYS.forEach(function (k) { payload[k] = state.tracking[k]; });
     payload.referrer = state.tracking.referrer;
     payload.submittedAt = new Date().toISOString();
@@ -844,7 +851,7 @@
     updateSubmitState();
     var payload = buildPayload();
     sendLead(payload).then(function () {
-      track('quiz_lead_submit', { lang: state.lang, city: state.answers.city, age: state.answers.age });
+      track('quiz_lead_submit', { lang: state.lang, quiz: QUIZ.id, city: state.answers.city || '', age: state.answers.age || '' });
       finish();
     }).catch(function (err) {
       console.warn('[MEDELA quiz] не удалось отправить заявку:', err);
