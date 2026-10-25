@@ -8,6 +8,8 @@
   var CONFIG = window.MEDELA_CONFIG || {};
   var CLINIC = CONFIG.clinic || {};
   var LANGS = ['ru', 'uz'];
+  // Название воронки — одинаковое в пикселе и в таблице лидов (колонка «Воронка»)
+  var FUNNEL_NAME = 'Сайт /zapis';
   var SERVICES = ['cardio', 'endo', 'pediatrics', 'gyneco', 'uzi', 'lab'];
 
   var TEXTS = {
@@ -208,7 +210,7 @@
     var placement = link.getAttribute('data-placement');
     var service = link.getAttribute('data-service') || '';
     track('zapis_bot_click', { lang: state.lang, placement: placement, service: service });
-    pixel('track', 'Lead', { content_name: 'telegram_bot', lang: state.lang, placement: placement, service: service });
+    pixel('track', 'Lead', { content_name: FUNNEL_NAME, lang: state.lang, placement: placement, service: service });
     // Даём пикселю долю секунды отправить событие, потом открываем Telegram
     if (!e.metaKey && !e.ctrlKey && !e.shiftKey) {
       e.preventDefault();
@@ -218,7 +220,7 @@
 
   function onPhoneClick() {
     track('zapis_phone_click', { lang: state.lang });
-    pixel('track', 'Contact', { content_name: 'phone', lang: state.lang });
+    pixel('track', 'Contact', { content_name: FUNNEL_NAME, channel: 'phone', lang: state.lang });
   }
 
   /* ---------- Рендер ---------- */

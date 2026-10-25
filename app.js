@@ -94,6 +94,9 @@
 
   // Какие события дублируются в Meta Pixel. Ответы квиза (здоровье, возраст, город) в Meta
   // не передаём: это чувствительные данные, Meta ограничивает за них пиксель.
+  // Название воронки — одинаковое в пикселе и в таблице лидов (колонка «Воронка»)
+  var FUNNEL_NAME = 'Квиз Check-up';
+
   var PIXEL_EVENTS = {
     quiz_start: ['trackCustom', 'QuizStart'],
     quiz_step: ['trackCustom', 'QuizStep'],
@@ -110,7 +113,7 @@
 
     var px = PIXEL_EVENTS[event];
     if (px && typeof window.fbq === 'function') {
-      var pxParams = { content_name: 'checkup_quiz', lang: state.lang };
+      var pxParams = { content_name: FUNNEL_NAME, lang: state.lang };
       if (event === 'quiz_step') pxParams.step = params.step;
       if (event === 'contact_click') pxParams.channel = params.channel;
       window.fbq(px[0], px[1], pxParams);
