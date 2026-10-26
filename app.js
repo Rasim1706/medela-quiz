@@ -824,7 +824,11 @@
       signal: controller ? controller.signal : undefined
     }).then(function (res) {
       if (timer) clearTimeout(timer);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
+      if (!res.ok) {
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          throw new Error('HTTP ' + res.status + (data && data.detail ? ' — ' + data.detail : ''));
+        });
+      }
       return res;
     }, function (err) {
       if (timer) clearTimeout(timer);

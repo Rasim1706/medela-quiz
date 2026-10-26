@@ -169,10 +169,42 @@ function corsHeaders(origin) {
  * Платформо-независимый обработчик.
  * @returns {{status:number, headers:object, body:object|null}}
  */
+// Самопроверка: открыть /api/lead в браузере. Показывает, что настроено, без значений токена и id.
+async function diagnose() {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  const out = {
+    ok: false,
+    TELEGRAM_BOT_TOKEN: token ? 'задан' : 'НЕ ЗАДАН',
+    TELEGRAM_CHAT_ID: chatId ? 'задан (' + String(chatId).slice(0, 5) + '…)' : 'НЕ ЗАДАН',
+    SHEETS_WEBHOOK_URL: process.env.SHEETS_WEBHOOK_URL ? 'задан' : 'не задан (необязательно)'
+  };
+  if (!token || !chatId) {
+    out.hint = 'Добавьте переменные в Vercel → Settings → Environment Variables (Production) и сделайте Redeploy';
+    return out;
+  }
+  try {
+    const me = await (await fetch('https://api.telegram.org/bot' + token + '/getMe')).json();
+    out.bot = me.ok ? '@' + me.result.username : 'ошибка токена: ' + me.description;
+    if (!me.ok) { out.hint = 'Токен неверный — скопируйте его из @BotFather заново'; return out; }
+    const chat = await (await fetch('https://api.telegram.org/bot' + token + '/getChat?chat_id=' + encodeURIComponent(chatId))).json();
+    out.chat = chat.ok ? 'группа найдена: ' + chat.result.title : 'ошибка: ' + chat.description;
+    if (!chat.ok) { out.hint = 'Проверьте TELEGRAM_CHAT_ID (с минусом) и что бот добавлен в группу'; return out; }
+    const member = await (await fetch('https://api.telegram.org/bot' + token + '/getChatMember?chat_id=' + encodeURIComponent(chatId) + '&user_id=' + me.result.id)).json();
+    out.botInChat = member.ok ? member.result.status : 'ошибка: ' + member.description;
+    out.ok = member.ok && ['administrator', 'member', 'creator'].includes(member.result.status) && member.result.can_send_messages !== false;
+    if (!out.ok) out.hint = 'Сделайте бота администратором группы с правом отправлять сообщения';
+  } catch (err) {
+    out.error = String(err.message || err);
+  }
+  return out;
+}
+
 async function handleLead({ method, origin, body }) {
   const headers = corsHeaders(origin);
   if (method === 'OPTIONS') return { status: 204, headers, body: null };
-  if (method !== 'POST') return { status: 405, headers: Object.assign({ Allow: 'POST, OPTIONS' }, headers), body: { ok: false, error: 'method_not_allowed' } };
+  if (method === 'GET') return { status: 200, headers, body: await diagnose() };
+  if (method !== 'POST') return { status: 405, headers: Object.assign({ Allow: 'GET, POST, OPTIONS' }, headers), body: { ok: false, error: 'method_not_allowed' } };
 
   const result = validateLead(body);
   if (result.spam) return { status: 200, headers, body: { ok: true } };
@@ -187,7 +219,11 @@ async function handleLead({ method, origin, body }) {
   if (sheet.status === 'rejected') console.error('[lead] ' + sheet.reason.message);
 
   const delivered = tg.status === 'fulfilled' || (sheet.status === 'fulfilled' && sheet.value === true);
-  if (!delivered) return { status: 502, headers, body: { ok: false, error: 'delivery_failed' } };
+  if (!delivered) {
+    // Причина без секретов — видна в ответе сервера и в логах Vercel
+    const detail = tg.status === 'rejected' ? String(tg.reason.message).replace(/bot\d+:[\w-]+/g, 'bot***') : '';
+    return { status: 502, headers, body: { ok: false, error: 'delivery_failed', detail: detail } };
+  }
   return { status: 200, headers, body: { ok: true } };
 }
 
