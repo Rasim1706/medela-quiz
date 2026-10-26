@@ -117,7 +117,7 @@ window.I18N = {
       consentBefore: 'Я согласен(на) на ',
       consentLink: 'обработку персональных данных',
       consentAfter: '',
-      submit: 'Отправить заявку',
+      submit: 'Получить консультацию',
       sending: 'Отправляем…',
       errors: {
         name: 'Пожалуйста, укажите фамилию и имя — хотя бы 2 символа',
@@ -251,7 +251,7 @@ window.I18N = {
       consentBefore: '',
       consentLink: 'Shaxsiy maʼlumotlarimni qayta ishlashga',
       consentAfter: ' roziman',
-      submit: 'Arizani yuborish',
+      submit: 'Maslahat olish',
       sending: 'Yuborilmoqda…',
       errors: {
         name: 'Iltimos, familiya va ismingizni kiriting — kamida 2 ta belgi',

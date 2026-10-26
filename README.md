@@ -294,7 +294,7 @@ Events Manager → пиксель `928181753700398` → **Пользовател
 | `quiz_language_select` | `lang`, `source` (`screen` / `switch` / `url`) | выбор языка на первом экране, в шапке или через `?lang=` |
 | `quiz_start` | `lang` | нажатие «Начать» |
 | `quiz_step` | `step` (1–5), `answer_code` (для вопроса 4 — коды через запятую) | ответ на вопрос и переход дальше |
-| `quiz_submit_click` | `lang` | нажатие «Отправить заявку» |
+| `quiz_submit_click` | `lang` | нажатие «Получить консультацию» |
 | `quiz_lead_submit` | `lang`, `city`, `age` (коды) | заявка успешно отправлена |
 | `contact_click` | `channel` (`phone` / `telegram`) | нажатие на телефон или Telegram |
 
@@ -313,7 +313,7 @@ Events Manager → пиксель `928181753700398` → **Пользовател
    | `PageView` | открытие страницы |
    | `QuizStart` (custom) | нажатие «Начать» |
    | `QuizStep` (custom, параметр `step` 1–5) | ответ на вопрос |
-   | `SubmitClick` (custom) | нажатие «Отправить заявку» (даже если форма заполнена с ошибками) |
+   | `SubmitClick` (custom) | нажатие «Получить консультацию» (даже если форма заполнена с ошибками) |
    | **`Lead`** (`content_name: 'Квиз Check-up'`) | заявка успешно отправлена — используйте как конверсию в рекламе |
    | `Contact` (параметр `channel`: `phone` / `telegram`) | нажатие на телефон или Telegram |
 

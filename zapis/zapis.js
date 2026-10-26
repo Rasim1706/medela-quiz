@@ -19,7 +19,7 @@
       switchTo: 'Oʻzbekcha',
       switchLabel: 'Переключить язык на узбекский',
       brandLabel: 'MEDELA — медицинская клиника в Ташкенте',
-      cta: 'Выбрать услугу в боте',
+      cta: 'Получить консультацию',
       pill: 'Пн–Сб, 8:00–18:00 · г. Ташкент, ул. Гагарина, 40/39',
       h1: 'Медицинская клиника для всей семьи в Ташкенте',
       lead: 'Кардиология, эндокринология, педиатрия, гинекология, УЗИ и анализы — под одной крышей. Запишитесь в Telegram за минуту.',
@@ -48,7 +48,7 @@
       serviceGo: 'Записаться →',
       stepsTitle: 'Как записаться',
       steps: [
-        'Нажмите «Выбрать услугу в боте»',
+        'Нажмите «Получить консультацию»',
         'Выберите услугу в Telegram-боте',
         'Администратор подтвердит запись'
       ],
@@ -65,7 +65,7 @@
       switchTo: 'Русский',
       switchLabel: 'Tilni rus tiliga oʻzgartirish',
       brandLabel: 'MEDELA — Toshkentdagi tibbiyot klinikasi',
-      cta: 'Botda xizmatni tanlash',
+      cta: 'Maslahat olish',
       pill: 'Du–Sha, 8:00–18:00 · Toshkent sh., Gagarin koʻchasi, 40/39',
       h1: 'Toshkentda butun oila uchun tibbiyot klinikasi',
       lead: 'Kardiologiya, endokrinologiya, pediatriya, ginekologiya, UZI va tahlillar — bir joyda. Telegram orqali bir daqiqada yoziling.',
@@ -94,7 +94,7 @@
       serviceGo: 'Yozilish →',
       stepsTitle: 'Qanday yozilish mumkin',
       steps: [
-        '«Botda xizmatni tanlash» tugmasini bosing',
+        '«Maslahat olish» tugmasini bosing',
         'Telegram-botda kerakli xizmatni tanlang',
         'Administratorimiz yozilishni tasdiqlaydi'
       ],
