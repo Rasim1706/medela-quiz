@@ -25,8 +25,11 @@ var COLUMNS = [
   { key: 'n', title: '№', width: 45 },
   { key: 'date', title: 'Дата', width: 90 },
   { key: 'time', title: 'Время', width: 60 },
-  { key: 'name', title: 'Имя', width: 210 },
+  { key: 'name', title: 'Имя', width: 190 },
   { key: 'phone', title: 'Телефон', width: 130 },
+  { key: 'lang', title: 'Язык', width: 55 },
+  { key: 'callTime', title: 'Когда удобно позвонить', width: 140 },
+  { key: 'details', title: 'Детали заявки', width: 320 },
   { key: 'funnel', title: 'Воронка', width: 160 },
   { key: 'platform', title: 'Площадка', width: 95 },
   { key: 'service', title: 'Услуга / жалоба', width: 180 },
@@ -44,11 +47,8 @@ var COLUMNS = [
   { key: 'comment', title: 'Комментарий', width: 220 },
   { key: 'repeat', title: 'Повтор', width: 70 },
   { key: 'doctor', title: 'Врач', width: 150 },
-  { key: 'lang', title: 'Язык', width: 55 },
   { key: 'city', title: 'Город', width: 100 },
-  { key: 'callTime', title: 'Когда удобно', width: 150 },
   { key: 'campaign', title: 'Кампания / объявление', width: 190 },
-  { key: 'details', title: 'Детали заявки', width: 280 },
   { key: 'tag', title: 'Метка / UTM', width: 220 },
   { key: 'telegramId', title: 'Telegram ID', width: 105 },
   { key: 'externalId', title: 'ID в системе', width: 90 }
@@ -56,10 +56,9 @@ var COLUMNS = [
 // Старые названия колонок (из прошлых версий) — для переноса данных
 // Колонки по центру; остальные — по левому краю. Длинные — обрезаются в ячейке, строка не растягивается.
 var CENTER_KEYS = ['n', 'date', 'time', 'phone', 'platform', 'call1', 'call1At', 'call2', 'call2At', 'call3', 'call3At', 'status', 'visitDate', 'visitTime', 'repeat', 'lang', 'telegramId', 'externalId'];
-var ROW_HEIGHT = 30;
 var FONT = 'Roboto';
 
-var OLD_TITLES = { 'Дата и время': 'datetime', 'Канал': 'funnel', 'Ответственный': 'operator', 'Услуга': 'service' };
+var OLD_TITLES = { 'Когда удобно': 'callTime', 'Дата и время': 'datetime', 'Канал': 'funnel', 'Ответственный': 'operator', 'Услуга': 'service' };
 
 var FUNNELS = ['Квиз Check-up', 'Квиз Гинеколог', 'Квиз Эндокринолог', 'Квиз по самочувствию', 'Бот записи', 'Сайт /zapis', 'Звонок', 'Instagram Direct', 'Telegram (личка)', 'Пришёл сам', 'Другое'];
 var PLATFORMS = ['Instagram', 'Facebook', 'Meta', 'Telegram', 'Google', 'Органика', 'Не определено'];
@@ -522,7 +521,11 @@ function beautify_(ss) {
     CENTER_KEYS.forEach(function (k) { col_(sh, k).offset(1, 0, rows - 1).setHorizontalAlignment('center'); });
     col_(sh, 'status').offset(1, 0, rows - 1).setFontWeight('bold');
     col_(sh, 'name').offset(1, 0, rows - 1).setFontWeight('bold');
-    sh.setRowHeightsForced(2, rows - 1, ROW_HEIGHT);
+    // «Детали заявки» и «Комментарий» переносятся по строкам — высота строки подстраивается под текст
+    ['details', 'comment'].forEach(function (k) {
+      col_(sh, k).offset(1, 0, rows - 1).setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP).setVerticalAlignment('top');
+    });
+    sh.autoResizeRows(2, rows - 1);
 
     var head = sh.getRange(1, 1, 1, cols);
     head.setFontFamily(FONT).setFontSize(10).setFontWeight('bold').setFontColor('#FFFFFF').setBackground('#0F4650')
@@ -602,6 +605,7 @@ function appendLead_(sh, lead) {
   lead.repeat = isRepeat_(sh, lead.phone) ? 'Повтор' : '';
   var values = COLUMNS.map(function (c) { return lead[c.key] === undefined ? '' : lead[c.key]; });
   sh.getRange(last + 1, 1, 1, values.length).setValues([values]);
+  try { sh.autoResizeRows(last + 1, 1); } catch (e) { /* не критично */ }
   return last + 1;
 }
 
