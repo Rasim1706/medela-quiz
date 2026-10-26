@@ -31,8 +31,11 @@ var COLUMNS = [
   { key: 'platform', title: 'Площадка', width: 95 },
   { key: 'service', title: 'Услуга / жалоба', width: 180 },
   { key: 'call1', title: 'Прозвон 1', width: 125 },
+  { key: 'call1At', title: 'Время прозвона 1', width: 120 },
   { key: 'call2', title: 'Прозвон 2', width: 125 },
+  { key: 'call2At', title: 'Время прозвона 2', width: 120 },
   { key: 'call3', title: 'Прозвон 3', width: 125 },
+  { key: 'call3At', title: 'Время прозвона 3', width: 120 },
   { key: 'status', title: 'Статус', width: 95 },
   { key: 'reason', title: 'Причина «не квал»', width: 165 },
   { key: 'visitDate', title: 'Дата визита', width: 105 },
@@ -52,7 +55,7 @@ var COLUMNS = [
 ];
 // Старые названия колонок (из прошлых версий) — для переноса данных
 // Колонки по центру; остальные — по левому краю. Длинные — обрезаются в ячейке, строка не растягивается.
-var CENTER_KEYS = ['n', 'date', 'time', 'phone', 'platform', 'call1', 'call2', 'call3', 'status', 'visitDate', 'visitTime', 'repeat', 'lang', 'telegramId', 'externalId'];
+var CENTER_KEYS = ['n', 'date', 'time', 'phone', 'platform', 'call1', 'call1At', 'call2', 'call2At', 'call3', 'call3At', 'status', 'visitDate', 'visitTime', 'repeat', 'lang', 'telegramId', 'externalId'];
 var ROW_HEIGHT = 30;
 var FONT = 'Roboto';
 
@@ -82,7 +85,8 @@ function onOpen() {
 }
 
 /**
- * Прозвон: при выборе результата в ячейку пишется примечание со временем звонка и оператором.
+ * Прозвон: при выборе результата в колонке «Прозвон N» в соседнюю «Время прозвона N» сама ставится
+ * дата и время звонка (очистили результат — время тоже очищается).
  * Если все три прозвона без ответа и статус пустой — статус становится «Недозвон».
  */
 function onEdit(e) {
@@ -93,11 +97,12 @@ function onEdit(e) {
     var callCols = ['call1', 'call2', 'call3'].map(colIndex_);
     if (callCols.indexOf(col) === -1) return;
     var value = String(e.range.getValue() || '');
-    var stamp = Utilities.formatDate(new Date(), TZ, 'dd.MM HH:mm');
-    var who = e.user && e.user.getEmail ? e.user.getEmail() : '';
-    e.range.setNote(value ? 'Звонок: ' + stamp + (who ? '\n' + who : '') : '');
-
     var row = e.range.getRow();
+    var n = callCols.indexOf(col) + 1;
+    var atCell = sh.getRange(row, colIndex_('call' + n + 'At'));
+    if (value) atCell.setValue(new Date()).setNumberFormat('dd.mm.yyyy hh:mm');
+    else atCell.clearContent();
+
     var calls = callCols.map(function (c) { return String(sh.getRange(row, c).getValue() || ''); });
     var statusCell = sh.getRange(row, colIndex_('status'));
     if (!statusCell.getValue() && calls.every(function (v) { return v && v.indexOf('Дозвонился') === -1; })) {
@@ -136,7 +141,7 @@ function setup() {
   sh.getRange(1, 1, 1, header.length).setValues([header])
     .setFontWeight('bold').setBackground('#0F4650').setFontColor('#FFFFFF')
     .setVerticalAlignment('middle').setWrap(true);
-  ['call1', 'call2', 'call3'].forEach(function (k) { col_(sh, k).setBackground('#2E6B75'); });
+  ['call1', 'call1At', 'call2', 'call2At', 'call3', 'call3At'].forEach(function (k) { col_(sh, k).setBackground('#2E6B75'); });
   sh.setRowHeight(1, 36);
   sh.setFrozenRows(1);
   sh.setFrozenColumns(4);
@@ -152,6 +157,10 @@ function setup() {
     .setDataValidation(SpreadsheetApp.newDataValidation().requireDate().setAllowInvalid(false)
       .setHelpText('Дата, на которую пациент записан. Двойной клик — календарь.').build());
   col_(sh, 'visitTime').offset(1, 0, rows).setNumberFormat('@');
+  ['call1At', 'call2At', 'call3At'].forEach(function (k) {
+    col_(sh, k).offset(1, 0, rows).setNumberFormat('dd.mm.yyyy hh:mm').setFontColor('#4B5563')
+      .setNote(null);
+  });
 
   validation_(sh, 'funnel', lists.getRange('A2:A30'), true);
   validation_(sh, 'platform', lists.getRange('B2:B30'));
@@ -207,9 +216,19 @@ function migrateLeads_(sh) {
   sh.copyTo(sh.getParent()).setName('Резерв лидов ' + stamp);
 
   var data = lastRow > 1 ? sh.getRange(2, 1, lastRow - 1, lastCol).getValues() : [];
-  var rows = data.filter(function (r) { return r.some(function (v) { return v !== ''; }); }).map(function (r) {
+  var notes = lastRow > 1 ? sh.getRange(2, 1, lastRow - 1, lastCol).getNotes() : [];
+  var year = Utilities.formatDate(new Date(), TZ, 'yyyy');
+  var rows = data.map(function (r, ri) {
     var o = {};
-    oldHeader.forEach(function (t, i) { var k = keyByTitle[t]; if (k && r[i] !== '') o[k] = r[i]; });
+    oldHeader.forEach(function (t, i) {
+      var k = keyByTitle[t];
+      if (k && r[i] !== '') o[k] = r[i];
+      // Время прозвона из прошлой версии лежало в примечании к ячейке: «Звонок: 26.10 14:35»
+      var m = /^call([123])$/.test(k || '') && /Звонок:\s*(\d{2})\.(\d{2})\s+(\d{2}):(\d{2})/.exec((notes[ri] || [])[i] || '');
+      if (m && !o[k + 'At']) o[k + 'At'] = Utilities.parseDate(year + '-' + m[2] + '-' + m[1] + ' ' + m[3] + ':' + m[4], TZ, 'yyyy-MM-dd HH:mm');
+    });
+    return o;
+  }).filter(function (o) { return Object.keys(o).length; }).map(function (o) {
     if (o.datetime instanceof Date) {
       o.date = dateOnly_(o.datetime);
       o.time = Utilities.formatDate(o.datetime, TZ, 'HH:mm');
@@ -509,7 +528,7 @@ function beautify_(ss) {
     head.setFontFamily(FONT).setFontSize(10).setFontWeight('bold').setFontColor('#FFFFFF').setBackground('#0F4650')
       .setHorizontalAlignment('center').setVerticalAlignment('middle').setWrapStrategy(SpreadsheetApp.WrapStrategy.WRAP)
       .setBorder(true, true, true, true, true, true, '#0B3740', SpreadsheetApp.BorderStyle.SOLID);
-    ['call1', 'call2', 'call3'].forEach(function (k) { col_(sh, k).setBackground('#2E6B75'); });
+    ['call1', 'call1At', 'call2', 'call2At', 'call3', 'call3At'].forEach(function (k) { col_(sh, k).setBackground('#2E6B75'); });
     sh.setRowHeightsForced(1, 1, 42);
     COLUMNS.forEach(function (c, i) { sh.setColumnWidth(i + 1, c.width); });
     if (sh.getMaxColumns() > cols) sh.hideColumns(cols + 1, sh.getMaxColumns() - cols);
