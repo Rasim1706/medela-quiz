@@ -77,6 +77,7 @@ function onOpen() {
     .addItem('1. Настроить / обновить таблицу', 'setup')
     .addItem('2. Подключить Telegram-бота', 'connectTelegramBot')
     .addItem('Оформить таблицу (без изменения данных)', 'beautify')
+    .addItem('Проверить прозвоны (время звонка)', 'checkCalls')
     .addSeparator()
     .addItem('Ссылка для приёма заявок от ботов/сайта', 'showWebhookInfo')
     .addItem('Добавить тестовые заявки', 'addTestLeads')
@@ -90,24 +91,36 @@ function onOpen() {
  */
 function onEdit(e) {
   try {
+    if (!e || !e.range) return;
     var sh = e.range.getSheet();
-    if (sh.getName() !== SHEET_LEADS || e.range.getRow() < 2 || e.range.getNumRows() > 1) return;
+    if (e.range.getRow() < 2 || e.range.getNumRows() > 1 || e.range.getNumColumns() > 1) return;
+    var head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function (v) { return String(v).trim(); });
     var col = e.range.getColumn();
-    var callCols = ['call1', 'call2', 'call3'].map(colIndex_);
-    if (callCols.indexOf(col) === -1) return;
-    var value = String(e.range.getValue() || '');
-    var row = e.range.getRow();
-    var n = callCols.indexOf(col) + 1;
-    var atCell = sh.getRange(row, colIndex_('call' + n + 'At'));
-    if (value) atCell.setValue(new Date()).setNumberFormat('dd.mm.yyyy hh:mm');
-    else atCell.clearContent();
+    var title = head[col - 1] || '';
+    var m = /^Прозвон\s*(\d)$/.exec(title);
+    if (!m) return; // правка не в колонке «Прозвон N» (или это не лист заявок)
 
-    var calls = callCols.map(function (c) { return String(sh.getRange(row, c).getValue() || ''); });
-    var statusCell = sh.getRange(row, colIndex_('status'));
-    if (!statusCell.getValue() && calls.every(function (v) { return v && v.indexOf('Дозвонился') === -1; })) {
-      statusCell.setValue('Недозвон');
+    var row = e.range.getRow();
+    var value = String(e.range.getValue() || '');
+    var atIdx = head.indexOf('Время прозвона ' + m[1]);
+    if (atIdx !== -1) {
+      var atCell = sh.getRange(row, atIdx + 1);
+      if (value) atCell.setValue(new Date()).setNumberFormat('dd.mm.yyyy hh:mm');
+      else atCell.clearContent();
     }
-  } catch (err) { /* простой триггер не должен мешать работе */ }
+
+    // Три прозвона без ответа и статус пустой — «Недозвон»
+    var callIdx = head.map(function (t, i) { return /^Прозвон\s*\d$/.test(t) ? i : -1; }).filter(function (i) { return i !== -1; });
+    var statusIdx = head.indexOf('Статус');
+    if (statusIdx === -1 || !callIdx.length) return;
+    var vals = sh.getRange(row, 1, 1, head.length).getValues()[0];
+    var calls = callIdx.map(function (i) { return String(vals[i] || ''); });
+    if (!vals[statusIdx] && calls.every(function (v) { return v && v.indexOf('Дозвонился') === -1; })) {
+      sh.getRange(row, statusIdx + 1).setValue('Недозвон');
+    }
+  } catch (err) {
+    console.error('onEdit: ' + (err && err.stack || err)); // видно в Apps Script → «Выполнения»
+  }
 }
 
 /* =========================== Настройка таблицы =========================== */
@@ -132,7 +145,7 @@ function setup() {
   lists.getRange('E2:E30').setBackground('#FFF2CC');
   lists.getRange('H1').setValue('Впишите имена операторов в жёлтые ячейки колонки E — они появятся в выпадающем списке «Оператор».').setFontStyle('italic');
 
-  var sh = getOrCreate_(ss, SHEET_LEADS);
+  var sh = leadsSheet_(ss, true);
   migrateLeads_(sh);
 
   var header = COLUMNS.map(function (c) { return c.title; });
@@ -260,7 +273,8 @@ function buildSummary_(ss) {
   s.showColumns(1, s.getMaxColumns());
 
   // В setFormula формулы пишутся с запятыми (английский синтаксис) — Таблица сама покажет их по-русски
-  var L = "'" + SHEET_LEADS + "'!";
+  var leads = leadsSheet_(ss);
+  var L = "'" + (leads ? leads.getName() : SHEET_LEADS) + "'!";
   var c = function (key) { var l = letter_(colIndex_(key)); return L + '$' + l + '$2:$' + l; };
   var D = c('date'), N = c('name'), P = c('platform'), F = c('funnel'), ST = c('status'), RS = c('reason'),
       RP = c('repeat'), OP = c('operator'), VD = c('visitDate');
@@ -499,6 +513,37 @@ function readSpend_(s) {
   return out;
 }
 
+/* =========================== Проверка прозвонов =========================== */
+
+// Пункт меню: показывает, видит ли скрипт лист и колонки, и ставит время там, где результат есть, а времени нет
+function checkCalls() {
+  var ui = SpreadsheetApp.getUi();
+  var ss = SpreadsheetApp.getActive();
+  var sh = leadsSheet_(ss);
+  if (!sh) { ui.alert('Не нашёл лист заявок: нужна вкладка, где в первой строке есть «Прозвон 1» и «Телефон».'); return; }
+  var head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function (v) { return String(v).trim(); });
+  var lines = ['Лист заявок: «' + sh.getName() + '»'];
+  var fixed = 0;
+  [1, 2, 3].forEach(function (n) {
+    var c = head.indexOf('Прозвон ' + n), t = head.indexOf('Время прозвона ' + n);
+    lines.push('Прозвон ' + n + ': ' + (c === -1 ? 'НЕТ колонки' : 'колонка ' + letter_(c + 1)) +
+      ' · Время прозвона ' + n + ': ' + (t === -1 ? 'НЕТ колонки' : 'колонка ' + letter_(t + 1)));
+    if (c === -1 || t === -1 || sh.getLastRow() < 2) return;
+    var rows = sh.getLastRow() - 1;
+    var res = sh.getRange(2, c + 1, rows, 1).getValues(), at = sh.getRange(2, t + 1, rows, 1).getValues();
+    for (var i = 0; i < rows; i++) {
+      if (res[i][0] && !at[i][0]) {
+        sh.getRange(i + 2, t + 1).setValue(new Date()).setNumberFormat('dd.mm.yyyy hh:mm').setNote('Время проставлено при проверке, а не в момент звонка');
+        fixed++;
+      }
+    }
+  });
+  lines.push('', 'Заполнено пустых «Время прозвона»: ' + fixed + (fixed ? ' (с пометкой в примечании — это время проверки, не звонка)' : ''));
+  lines.push('Дальше время будет ставиться само при выборе результата прозвона.');
+  lines.push('Если не ставится — Расширения → Apps Script: слева должен быть ОДИН файл .gs (старые копии удалите).');
+  ui.alert(lines.join('\n'));
+}
+
 /* =========================== Оформление =========================== */
 
 // Пункт меню: только внешний вид, данные не меняются
@@ -509,7 +554,7 @@ function beautify() {
 
 function beautify_(ss) {
   var line = '#E3E6EA';
-  var sh = ss.getSheetByName(SHEET_LEADS);
+  var sh = leadsSheet_(ss);
   if (sh) {
     var rows = sh.getMaxRows(), cols = COLUMNS.length;
     var all = sh.getRange(1, 1, rows, cols);
@@ -583,7 +628,7 @@ function addLead_(lead, rawText) {
     var cache = CacheService.getScriptCache();
     var hash = rawText ? digest_(rawText) : '';
     if (hash && cache.get('lead_' + hash)) return { ok: true, duplicate: true };
-    var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_LEADS);
+    var sh = leadsSheet_(SpreadsheetApp.getActive());
     if (lead.externalId && findRow_(sh, 'externalId', lead.externalId)) {
       if (hash) cache.put('lead_' + hash, '1', 21600);
       return { ok: true, duplicate: true };
@@ -743,7 +788,7 @@ function handleTelegramUpdate_(update) {
 }
 
 function statsToday_() {
-  var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_LEADS);
+  var sh = leadsSheet_(SpreadsheetApp.getActive());
   if (sh.getLastRow() < 2) return 'Сегодня лидов пока нет.';
   var n = sh.getLastRow() - 1;
   var dates = col_(sh, 'date').offset(1, 0, n).getValues();
@@ -1012,6 +1057,20 @@ function letter_(n) {
   var s = '';
   while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
   return s;
+}
+
+// Лист заявок: «Лиды», а если вкладку переименовали — любой лист, где в шапке есть «Прозвон 1» и «Телефон».
+function leadsSheet_(ss, create) {
+  var sh = ss.getSheetByName(SHEET_LEADS);
+  if (sh) return sh;
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var lc = sheets[i].getLastColumn();
+    if (!lc) continue;
+    var head = sheets[i].getRange(1, 1, 1, lc).getValues()[0].map(String);
+    if (head.indexOf('Прозвон 1') !== -1 && head.indexOf('Телефон') !== -1) return sheets[i];
+  }
+  return create ? ss.insertSheet(SHEET_LEADS, 0) : null;
 }
 
 function getOrCreate_(ss, name) { return ss.getSheetByName(name) || ss.insertSheet(name); }
