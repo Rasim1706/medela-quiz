@@ -71,6 +71,7 @@ var STATUS_COLORS = { 'Квал': '#B6D7A8', 'Не квал': '#EA9999', 'Нед
 var REASONS = ['Дорого', 'Нет нужной услуги', 'Другой город', 'Только узнать цену', 'Записался в другом месте', 'Ошибся номером', 'Спам', 'Другое'];
 var DEFAULT_OPERATORS = ['Оператор 1', 'Оператор 2', 'Оператор 3'];
 var REPEAT_DAYS = 30;
+var NO_LEADS_SHEET = 'В этой таблице ещё нет листа «Лиды». Сначала запустите функцию setup (или в таблице: MEDELA → 1. Настроить / обновить таблицу).';
 
 /* =========================== Меню =========================== */
 
@@ -634,6 +635,7 @@ function addLead_(lead, rawText) {
     var hash = rawText ? digest_(rawText) : '';
     if (hash && cache.get('lead_' + hash)) return { ok: true, duplicate: true };
     var sh = leadsSheet_(SpreadsheetApp.getActive());
+    if (!sh) throw new Error(NO_LEADS_SHEET);
     if (lead.externalId && findRow_(sh, 'externalId', lead.externalId)) {
       if (hash) cache.put('lead_' + hash, '1', 21600);
       return { ok: true, duplicate: true };
@@ -977,7 +979,7 @@ function processFbImport(e) {
   try {
     var ss = SpreadsheetApp.getActive();
     var leads = leadsSheet_(ss);
-    if (!leads) return;
+    if (!leads) { if (manual) SpreadsheetApp.getUi().alert(NO_LEADS_SHEET); return; }
     var group = groupSettings_();
     var oldBefore = Date.now() - FB_OLD_HOURS * 3600 * 1000;
 
