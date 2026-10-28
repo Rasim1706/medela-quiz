@@ -8,6 +8,8 @@
  *  • Telegram-бот     — администратор пересылает боту заявки из группы (можно сразу пачкой),
  *                       скрипт раз в минуту забирает их (pollTelegram), разбирает и добавляет строки.
  *                       Сервер не нужен.
+ *  • Лид-формы Meta   — выгрузку лидов (CSV) импортируют на лист «Импорт FB», скрипт раз в 5 минут добавляет
+ *                       новые лиды в «Лиды» и отправляет их в Telegram-группу (processFbImport).
  *  • doPost()         — тот же приёмник принимает заявки и напрямую от ботов/сайта:
  *                       JSON с полями или {"text": "текст сообщения"}.
  *
@@ -60,7 +62,7 @@ var FONT = 'Roboto';
 
 var OLD_TITLES = { 'Когда удобно': 'callTime', 'Дата и время': 'datetime', 'Канал': 'funnel', 'Ответственный': 'operator', 'Услуга': 'service' };
 
-var FUNNELS = ['Квиз Check-up', 'Квиз Гинеколог', 'Квиз Эндокринолог', 'Квиз по самочувствию', 'Бот записи', 'Сайт /zapis', 'Звонок', 'Instagram Direct', 'Telegram (личка)', 'Пришёл сам', 'Другое'];
+var FUNNELS = ['Квиз Check-up', 'Квиз Гинеколог', 'Квиз Эндокринолог', 'Квиз по самочувствию', 'Лид-форма Check-up', 'Лид-форма Гинеколог', 'Лид-форма Эндокринолог', 'Бот записи', 'Сайт /zapis', 'Звонок', 'Instagram Direct', 'Telegram (личка)', 'Пришёл сам', 'Другое'];
 var PLATFORMS = ['Instagram', 'Facebook', 'Meta', 'Telegram', 'Google', 'Органика', 'Не определено'];
 var CALL_RESULTS = ['✅ Дозвонился', '📵 Не взял трубку', '🔕 Выключен / недоступен', '⏰ Просил перезвонить', '❌ Неверный номер'];
 var STATUSES = ['Квал', 'Не квал', 'Недозвон'];
@@ -76,6 +78,8 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('MEDELA')
     .addItem('1. Настроить / обновить таблицу', 'setup')
     .addItem('2. Подключить Telegram-бота', 'connectTelegramBot')
+    .addItem('3. Подключить отправку лидов в группу', 'connectLeadsGroup')
+    .addItem('Обработать импорт из Facebook', 'runFbImport')
     .addItem('Оформить таблицу (без изменения данных)', 'beautify')
     .addItem('Проверить прозвоны (время звонка)', 'checkCalls')
     .addSeparator()
@@ -818,6 +822,309 @@ function tgSend_(chatId, text, replyTo) {
   });
 }
 
+/* =========================== Лид-формы Facebook / Instagram =========================== */
+/*
+ * Лиды из Meta выгружаются файлом (CSV) и импортируются в таблицу на лист «Импорт FB»
+ * (Файл → Импорт; можно «Заменить текущий лист», «Добавить к текущему листу» или «Вставить новый лист»).
+ * Раз в 5 минут скрипт находит новые строки на любом листе с выгрузкой Meta, добавляет их в «Лиды»
+ * и отправляет в Telegram-группу. В выгрузке появляется колонка «Обработано»; повторный импорт тех же лидов
+ * дублей не создаёт (сверка по ID лида).
+ */
+
+var SHEET_FB = 'Импорт FB';
+var FB_MAX_SEND = 15;      // за один запуск (лимит Telegram — около 20 сообщений в минуту в группу)
+var FB_OLD_HOURS = 48;     // лиды старше — только в таблицу, без отправки в группу (первый импорт архива)
+var FB_STATUS_TITLE = 'Обработано';
+
+// Названия колонок выгрузки Meta (английские и русские), нормализованные: нижний регистр, пробелы → «_»
+var FB_HEADERS = {
+  id: ['id', 'lead_id', 'leadgen_id', 'id_лида'],
+  created: ['created_time', 'created', 'время_создания', 'дата_создания', 'создано', 'дата'],
+  form: ['form_name', 'form', 'название_формы', 'форма'],
+  campaign: ['campaign_name', 'campaign', 'название_кампании', 'кампания'],
+  adset: ['adset_name', 'название_группы_объявлений', 'группа_объявлений'],
+  ad: ['ad_name', 'название_объявления', 'объявление'],
+  platform: ['platform', 'платформа'],
+  name: ['full_name', 'полное_имя', 'имя_и_фамилия', 'имя', 'name', 'фио', 'ism'],
+  firstName: ['first_name'],
+  lastName: ['last_name', 'фамилия'],
+  phone: ['phone_number', 'phone', 'номер_телефона', 'телефон', 'telefon', 'telefon_raqami', 'raqam']
+};
+var FB_SKIP = ['ad_id', 'adset_id', 'campaign_id', 'form_id', 'is_organic', 'lead_status', 'статус', 'inbox_url', 'retailer_item_id', 'vehicle', 'home_listing'];
+
+function fbKey_(title) {
+  return String(title || '').toLowerCase().trim().replace(/[?:!.]+$/, '').replace(/[\s_]+/g, '_');
+}
+
+// Номер колонки (с 0) для каждого поля или -1
+function fbColumns_(head) {
+  var keys = head.map(fbKey_);
+  var map = {};
+  Object.keys(FB_HEADERS).forEach(function (f) {
+    map[f] = -1;
+    for (var i = 0; i < keys.length && map[f] === -1; i++) if (FB_HEADERS[f].indexOf(keys[i]) !== -1) map[f] = i;
+  });
+  return map;
+}
+
+// Листы с выгрузкой Meta: есть колонка телефона и хотя бы одна служебная (форма / время / ID). Возвращает [{sh, headRow, head}]
+function fbSheets_(ss) {
+  var leads = leadsSheet_(ss);
+  var out = [];
+  ss.getSheets().forEach(function (sh) {
+    var name = sh.getName();
+    if ((leads && sh.getSheetId() === leads.getSheetId()) || name === SHEET_SUMMARY || name === SHEET_LISTS || /^Резерв/.test(name)) return;
+    var lc = sh.getLastColumn(), lr = sh.getLastRow();
+    if (!lc || lr < 2) return;
+    var top = sh.getRange(1, 1, Math.min(lr, 10), lc).getValues();
+    for (var r = 0; r < top.length; r++) {
+      var m = fbColumns_(top[r]);
+      if (m.phone !== -1 && (m.form !== -1 || m.created !== -1 || m.id !== -1)) { out.push({ sh: sh, headRow: r + 1, head: top[r].map(String) }); return; }
+    }
+  });
+  return out;
+}
+
+function fbValue_(v) {
+  if (v instanceof Date) return v;
+  return String(v === undefined || v === null ? '' : v).trim().replace(/^(?:l|ag|as|c|f|p):/, '');
+}
+
+// Ответы Meta приходят в виде «утро_(8:00–12:00)» — возвращаем пробелы
+function fbText_(v) {
+  return String(fbValue_(v)).replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function fbDate_(v) {
+  if (v instanceof Date) return v;
+  var s = String(v || '').trim();
+  var m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?\s*(Z|[+-]\d{2}:?\d{2})?/.exec(s);
+  if (m) {
+    var tz = m[7] ? (m[7] === 'Z' ? 'Z' : m[7].replace(/^([+-]\d{2})(\d{2})$/, '$1:$2')) : '+05:00';
+    var d = new Date(m[1] + '-' + m[2] + '-' + m[3] + 'T' + m[4] + ':' + m[5] + ':' + (m[6] || '00') + tz);
+    if (!isNaN(d)) return d;
+  }
+  m = /^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})(?:[ ,]+(\d{1,2}):(\d{2}))?/.exec(s);
+  if (m) return Utilities.parseDate(m[3] + '-' + m[2] + '-' + m[1] + ' ' + (m[4] || '0') + ':' + (m[5] || '00'), TZ, 'yyyy-M-d H:mm');
+  return null;
+}
+
+// Название лид-формы → воронка
+function fbFunnel_(form) {
+  var f = String(form || '').toLowerCase();
+  if (/check|чек|чекап/.test(f)) return 'Лид-форма Check-up';
+  if (/гинек|ginek|gynec/.test(f)) return 'Лид-форма Гинеколог';
+  if (/эндокр|endokr|endocr/.test(f)) return 'Лид-форма Эндокринолог';
+  return form ? ('Лид-форма: ' + form).slice(0, 60) : 'Лид-форма';
+}
+
+// Строка выгрузки → заявка для листа «Лиды» (+ answers — прочие ответы формы для сообщения в группу)
+function fbLead_(row, head, m) {
+  var get = function (f) { return m[f] === -1 ? '' : fbValue_(row[m[f]]); };
+  var form = fbText_(get('form'));
+  var name = String(get('name') || [get('firstName'), get('lastName')].filter(Boolean).join(' ')).trim();
+  var created = fbDate_(row[m.created]);
+  var platform = String(get('platform')).toLowerCase();
+  var lead = {
+    name: name,
+    phone: normalizePhone(get('phone')),
+    funnel: fbFunnel_(form),
+    platform: platform ? detectPlatform_(platform) : 'Meta',
+    campaign: [get('campaign'), get('adset'), get('ad')].map(String).filter(Boolean).join(' / '),
+    tag: form ? 'Лид-форма: ' + form : '',
+    when: created || new Date(),
+    created: created,
+    answers: []
+  };
+  var id = String(get('id'));
+  lead.externalId = id ? 'fb:' + id : 'fb:' + digest_(lead.phone + '|' + (created ? created.getTime() : '') + '|' + form).slice(0, 12);
+  if (/(^|[^a-z])uz([^a-z]|$)|uzb|o.zbek|узб/i.test(form)) lead.lang = 'UZ';
+  else if (/(^|[^a-z])ru([^a-z]|$)|рус/i.test(form)) lead.lang = 'RU';
+
+  var known = {};
+  Object.keys(m).forEach(function (f) { if (m[f] !== -1) known[m[f]] = true; });
+  var details = [];
+  head.forEach(function (title, i) {
+    var key = fbKey_(title);
+    if (known[i] || !key || FB_SKIP.indexOf(key) !== -1 || key === fbKey_(FB_STATUS_TITLE)) return;
+    var value = fbText_(row[i]);
+    if (!value) return;
+    var q = fbText_(title).replace(/^./, function (c) { return c.toUpperCase(); });
+    if (!lead.callTime && /удобн|звон|qulay|vaqt|call|time/.test(key)) lead.callTime = value;
+    else if (!lead.city && /город|shahar|city|регион/.test(key)) { lead.city = value; lead.answers.push(q + ': ' + value); }
+    else if (!lead.lang && /язык|til|language/.test(key)) lead.lang = /узб|uz|o.zbek/i.test(value) ? 'UZ' : (/рус|ru/i.test(value) ? 'RU' : value);
+    else {
+      if (!lead.service && /услуг|направлен|беспоко|жалоб|xizmat|интерес|провер/.test(key)) lead.service = value;
+      details.push(q + ': ' + value);
+      lead.answers.push(q + ': ' + value);
+    }
+  });
+  if (form) details.push('Форма: ' + form);
+  lead.details = details.join('\n');
+  return lead;
+}
+
+/**
+ * Обрабатывает выгрузки Meta: новые лиды → лист «Лиды» → Telegram-группа.
+ * Запускается по триггеру раз в 5 минут и из меню (тогда показывает итог).
+ */
+function processFbImport(e) {
+  var manual = !e || !e.triggerUid;
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(manual ? 20000 : 1000)) return;
+  var stat = { added: 0, sent: 0, failed: 0, waiting: 0, old: 0, dup: 0 };
+  try {
+    var ss = SpreadsheetApp.getActive();
+    var leads = leadsSheet_(ss);
+    if (!leads) return;
+    var group = groupSettings_();
+    var oldBefore = Date.now() - FB_OLD_HOURS * 3600 * 1000;
+
+    fbSheets_(ss).forEach(function (src) {
+      var sh = src.sh, head = src.head;
+      var stCol = head.indexOf(FB_STATUS_TITLE);
+      if (stCol === -1) {
+        stCol = head.length;
+        while (stCol > 0 && !head[stCol - 1]) stCol--; // первая пустая колонка после данных
+        sh.getRange(src.headRow, stCol + 1).setValue(FB_STATUS_TITLE).setFontWeight('bold');
+        head[stCol] = FB_STATUS_TITLE;
+      }
+      var m = fbColumns_(head);
+      var n = sh.getLastRow() - src.headRow;
+      if (n < 1) return;
+      var rows = sh.getRange(src.headRow + 1, 1, n, Math.max(head.length, stCol + 1)).getValues();
+      var status = rows.map(function (r) { return [r[stCol] === undefined ? '' : r[stCol]]; });
+      var changed = false;
+
+      rows.forEach(function (row, i) {
+        var st = String(status[i][0] || '');
+        if (st && st.indexOf('⚠️') !== 0) return;               // уже обработан
+        var lead = fbLead_(row, head, m);
+        if (!lead.phone && !lead.name) return;                   // пустая строка
+
+        var rowNum = findRow_(leads, 'externalId', lead.externalId);
+        if (!rowNum) {
+          var res = addLead_(lead);
+          if (!res.ok) { status[i][0] = '⚠️ не добавлен: ' + res.error; changed = true; return; }
+          rowNum = res.row || findRow_(leads, 'externalId', lead.externalId);
+          stat.added++;
+          changed = true;
+          if (lead.created && lead.created.getTime() < oldBefore) { status[i][0] = '✅ строка ' + rowNum + ' · старый лид, в группу не отправлялся'; stat.old++; return; }
+          if (!group) { status[i][0] = '✅ строка ' + rowNum + ' · группа не подключена'; return; }
+        } else if (!st) { // тот же лид импортировали повторно
+          status[i][0] = '✅ уже в таблице (строка ' + rowNum + ')'; stat.dup++; changed = true; return;
+        } else if (!group) return;
+
+        if (stat.sent + stat.failed >= FB_MAX_SEND) { status[i][0] = '⚠️ строка ' + rowNum + ' · в очереди на отправку в группу'; stat.waiting++; changed = true; return; }
+        var sent = groupSend_(group, fbMessage_(lead));
+        if (sent.ok) { status[i][0] = '✅ строка ' + rowNum + ' · отправлен в группу'; stat.sent++; }
+        else { status[i][0] = '⚠️ строка ' + rowNum + ' · не отправлен в группу: ' + sent.error; stat.failed++; }
+        changed = true;
+        Utilities.sleep(1100);
+      });
+      if (changed) sh.getRange(src.headRow + 1, stCol + 1, n, 1).setValues(status);
+    });
+  } finally {
+    lock.releaseLock();
+  }
+  if (manual) {
+    SpreadsheetApp.getActive().toast(
+      'Новых лидов: ' + stat.added + ' · отправлено в группу: ' + stat.sent +
+      (stat.old ? ' · старых (без отправки): ' + stat.old : '') +
+      (stat.dup ? ' · уже были в таблице: ' + stat.dup : '') +
+      (stat.waiting ? ' · ждут отправки: ' + stat.waiting + ' (уйдут в течение 5 минут)' : '') +
+      (stat.failed ? ' · ошибок отправки: ' + stat.failed + ' (см. колонку «' + FB_STATUS_TITLE + '»)' : ''),
+      'Импорт из Facebook', 10);
+  }
+  return stat;
+}
+
+function fbMessage_(lead) {
+  var esc = function (s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  var lines = ['📋 <b>' + esc(lead.funnel) + '</b>', '🆕 Новая заявка · ' + esc(lead.platform), ''];
+  if (lead.name) lines.push('👤 ' + esc(lead.name));
+  if (lead.phone) lines.push('📞 ' + esc(lead.phone));
+  if (lead.callTime) lines.push('🕐 Когда удобно позвонить: ' + esc(lead.callTime));
+  if (lead.lang) lines.push('🌐 Язык: ' + esc(lead.lang));
+  if (lead.answers.length) {
+    lines.push('');
+    lead.answers.forEach(function (a) { lines.push('▫️ ' + esc(a)); });
+  }
+  lines.push('');
+  if (lead.tag) lines.push('📝 ' + esc(lead.tag));
+  if (lead.campaign) lines.push('📣 ' + esc(lead.campaign));
+  lines.push('🗓 ' + Utilities.formatDate(lead.when, TZ, 'dd.MM.yyyy HH:mm'));
+  lines.push('ID лида: ' + esc(lead.externalId.replace(/^fb:/, '')));
+  return lines.join('\n');
+}
+
+// Куда отправлять лиды: бот, который уже состоит в группе (например, бот квиза), и ID группы
+function groupSettings_() {
+  var p = PropertiesService.getScriptProperties();
+  var chat = p.getProperty('GROUP_CHAT');
+  var token = p.getProperty('GROUP_TOKEN') || p.getProperty('BOT_TOKEN');
+  return chat && token ? { token: token, chat: chat } : null;
+}
+
+function groupSend_(group, html) {
+  try {
+    var r = UrlFetchApp.fetch('https://api.telegram.org/bot' + group.token + '/sendMessage', {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ chat_id: group.chat, text: html, parse_mode: 'HTML', disable_web_page_preview: true })
+    });
+    var data = JSON.parse(r.getContentText() || '{}');
+    return data.ok ? { ok: true } : { ok: false, error: data.description || ('HTTP ' + r.getResponseCode()) };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) };
+  }
+}
+
+function connectLeadsGroup() {
+  var ui = SpreadsheetApp.getUi();
+  var p = PropertiesService.getScriptProperties();
+  var res = ui.prompt('Отправка лидов в Telegram-группу (1/2)',
+    'Токен бота, который уже добавлен в группу с заявками (например, бот квиза — тот же, что TELEGRAM_BOT_TOKEN в Vercel).\n\n' +
+    'Оставьте пустым, чтобы отправлял бот-учётчик этой таблицы (его нужно добавить в группу).', ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+  var token = res.getResponseText().trim() || p.getProperty('BOT_TOKEN');
+  if (!token) { ui.alert('Нет токена: вставьте токен бота или сначала подключите бота-учётчика (пункт 2 меню).'); return; }
+  var me = JSON.parse(UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/getMe', { muteHttpExceptions: true }).getContentText() || '{}');
+  if (!me.ok) { ui.alert('Токен не подошёл: ' + (me.description || 'проверьте, что скопировали его целиком')); return; }
+
+  res = ui.prompt('Отправка лидов в Telegram-группу (2/2)',
+    'ID группы (число вида -100…, тот же, что TELEGRAM_CHAT_ID в Vercel):', ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+  var chat = res.getResponseText().trim().replace(/\s/g, '');
+  if (!/^-?\d+$/.test(chat) && !/^@\w+$/.test(chat)) { ui.alert('ID группы — это число, например -1001234567890.'); return; }
+
+  var test = groupSend_({ token: token, chat: chat }, '✅ Таблица лидов подключена. Сюда будут приходить заявки из лид-форм Facebook / Instagram.');
+  if (!test.ok) {
+    ui.alert('Бот @' + me.result.username + ' не смог написать в группу: ' + test.error +
+      '\n\nПроверьте, что бот добавлен в группу и может отправлять сообщения, и что ID группы верный.');
+    return;
+  }
+  if (token === p.getProperty('BOT_TOKEN')) p.deleteProperty('GROUP_TOKEN'); else p.setProperty('GROUP_TOKEN', token);
+  p.setProperty('GROUP_CHAT', chat);
+  ensureFbImport_();
+  ui.alert('Готово: бот @' + me.result.username + ' отправил в группу проверочное сообщение.\n\n' +
+    'Теперь импортируйте выгрузку лидов из Meta (CSV) на лист «' + SHEET_FB + '»: Файл → Импорт → Загрузка → ' +
+    '«Заменить текущий лист». В течение 5 минут новые лиды появятся в «Лидах» и в группе ' +
+    '(или сразу: MEDELA → Обработать импорт из Facebook).');
+}
+
+// Лист для выгрузки и триггер раз в 5 минут
+function ensureFbImport_() {
+  var ss = SpreadsheetApp.getActive();
+  if (!ss.getSheetByName(SHEET_FB)) ss.insertSheet(SHEET_FB);
+  var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'processFbImport'; });
+  if (!has) ScriptApp.newTrigger('processFbImport').timeBased().everyMinutes(5).create();
+}
+
+function runFbImport() {
+  ensureFbImport_();
+  processFbImport();
+}
+
 /* =========================== Разбор заявок =========================== */
 
 /** Заявка JSON с полями (например, из функции квиза server/lib/lead.js). */
@@ -867,7 +1174,7 @@ var FIELD_LABELS = {
   service: ['проверить в первую очередь', 'услуга', 'направление', 'xizmat', 'что проверить', 'беспокоит', 'жалоб']
 };
 // Подписи, которые разбираются отдельно и не дублируются в «Детали»
-var SKIP_LABELS = ['utm', 'источник', 'referrer', 'реферер', 'получено', 'telegram'];
+var SKIP_LABELS = ['id лида', 'utm', 'источник', 'referrer', 'реферер', 'получено', 'telegram'];
 
 /**
  * Разбирает текст заявки любого формата: «Метка: значение», строки с эмодзи (👤 📞 🩺 📍 📣),
@@ -952,7 +1259,8 @@ function parseText(text) {
 
   // 6) Канал, язык, номер заявки, Telegram ID
   var ext = /Заявка\s*#\s*(\d+)/i.exec(text);
-  lead.externalId = ext ? '#' + ext[1] : '';
+  var fbId = /ID лида\s*:\s*([\w:-]+)/i.exec(text); // лид-форма Facebook, отправленная таблицей в группу
+  lead.externalId = ext ? '#' + ext[1] : (fbId ? 'fb:' + fbId[1] : '');
   lead.funnel = detectFunnel_(text, lines, !!ext);
   var lang = String(lead.lang || '').toLowerCase();
   lead.lang = /узб|uz|o.zbek/i.test(lang) ? 'UZ' : (/рус|ru/i.test(lang) ? 'RU' : (tagParts[0] && tagParts[0].length === 2 ? tagParts[0].toUpperCase() : ''));
@@ -1129,5 +1437,5 @@ function addTestLeads() {
 
 // Для проверки вне Google (Node.js)
 if (typeof module !== 'undefined') {
-  module.exports = { parseText: parseText, normalizeFields: normalizeFields, normalizePhone: normalizePhone };
+  module.exports = { processFbImport: processFbImport, fbLead_: fbLead_, fbColumns_: fbColumns_, fbMessage_: fbMessage_, parseText: parseText, normalizeFields: normalizeFields, normalizePhone: normalizePhone };
 }
