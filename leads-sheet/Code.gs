@@ -999,6 +999,7 @@ function processFbImport(e) {
       rows.forEach(function (row, i) {
         var st = String(status[i][0] || '');
         if (st && st.indexOf('⚠️') !== 0) return;               // уже обработан
+        if (fbColumns_(row).phone !== -1) return;                // шапка следующего файла (импорт «Добавить к текущему листу»)
         var lead = fbLead_(row, head, m);
         if (!lead.phone && !lead.name) return;                   // пустая строка
 
