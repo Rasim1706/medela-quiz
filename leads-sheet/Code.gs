@@ -79,6 +79,7 @@ function onOpen() {
     .addItem('1. Настроить / обновить таблицу', 'setup')
     .addItem('2. Подключить Telegram-бота', 'connectTelegramBot')
     .addItem('3. Подключить отправку лидов в группу', 'connectLeadsGroup')
+    .addItem('4. Подключить таблицу с лид-формами', 'connectFbSource')
     .addItem('Обработать импорт из Facebook', 'runFbImport')
     .addItem('Оформить таблицу (без изменения данных)', 'beautify')
     .addItem('Проверить прозвоны (время звонка)', 'checkCalls')
@@ -980,7 +981,7 @@ function processFbImport(e) {
     var group = groupSettings_();
     var oldBefore = Date.now() - FB_OLD_HOURS * 3600 * 1000;
 
-    fbSheets_(ss).forEach(function (src) {
+    fbSources_(ss).forEach(function (src) {
       var sh = src.sh, head = src.head;
       var stCol = head.indexOf(FB_STATUS_TITLE);
       if (stCol === -1) {
@@ -1119,6 +1120,40 @@ function ensureFbImport_() {
   if (!ss.getSheetByName(SHEET_FB)) ss.insertSheet(SHEET_FB);
   var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'processFbImport'; });
   if (!has) ScriptApp.newTrigger('processFbImport').timeBased().everyMinutes(5).create();
+}
+
+// Листы с выгрузкой: в этой таблице и в отдельной таблице с лид-формами (если подключена)
+function fbSources_(ss) {
+  var list = fbSheets_(ss);
+  var id = PropertiesService.getScriptProperties().getProperty('FB_SOURCE_ID');
+  if (id) {
+    try { list = list.concat(fbSheets_(SpreadsheetApp.openById(id))); }
+    catch (err) { console.error('Таблица с лид-формами недоступна: ' + err); }
+  }
+  return list;
+}
+
+// Отдельная таблица, куда падают лид-формы (каждая форма — на своём листе)
+function connectFbSource() {
+  var ui = SpreadsheetApp.getUi();
+  var p = PropertiesService.getScriptProperties();
+  var res = ui.prompt('Таблица с лид-формами',
+    'Вставьте ссылку на таблицу, где лежат лиды из лид-форм (все листы с выгрузкой Meta будут обрабатываться).\n' +
+    'Чтобы отключить её, отправьте пустое поле.', ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+  var text = res.getResponseText().trim();
+  if (!text) { p.deleteProperty('FB_SOURCE_ID'); ui.alert('Отдельная таблица отключена.'); return; }
+  var id = (/\/d\/([\w-]{20,})/.exec(text) || [])[1] || (/^[\w-]{20,}$/.test(text) ? text : '');
+  if (!id) { ui.alert('Не похоже на ссылку Google Таблицы.'); return; }
+  var src;
+  try { src = SpreadsheetApp.openById(id); } catch (err) { ui.alert('Нет доступа к таблице: ' + err.message); return; }
+  if (src.getId() === SpreadsheetApp.getActive().getId()) { ui.alert('Это та же таблица — её листы и так обрабатываются.'); return; }
+  var found = fbSheets_(src).map(function (x) { return '• ' + x.sh.getName() + ' (' + (x.sh.getLastRow() - x.headRow) + ' строк)'; });
+  p.setProperty('FB_SOURCE_ID', id);
+  ensureFbImport_();
+  ui.alert('Подключена таблица «' + src.getName() + '».\n\n' + (found.length
+    ? 'Листы с лидами:\n' + found.join('\n') + '\n\nНовые лиды будут попадать в «Лиды» и в группу каждые 5 минут.'
+    : 'Пока не нашёл листов с выгрузкой Meta (нужны колонки phone_number и form_name / created_time). Как только они появятся, лиды начнут обрабатываться.'));
 }
 
 function runFbImport() {
